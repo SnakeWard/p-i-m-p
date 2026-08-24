@@ -107,3 +107,45 @@ Line flips (3), all `human_pd` CONDITIONAL → PASS:
 - Barbara Allen L1: In Scarlet Town where I was born
 
 Slogan collection unchanged. Self-plug still off. Stop (N5): one measured bump.
+
+---
+
+## Gold schema (G0)
+
+Canonical store: `data/gold-labels.jsonl` (never mixed into `data/pimp-mod.jsonl`).
+Predictions (`pred_*`) are frozen at label time. Record `humanOverride` may hold `gold:<gold_id>` only.
+
+Required fields: `gold_id, record_id, collection, section, line_index, line_text, pred_verdict, pred_cds, pred_classes, pred_note, pred_rewrite, spec_trope_check, spec_spine, spec_color, label, label_scope, reason, labeled_at`.
+
+Label: `pass | false_positive | miss | partial`. Scope: `verdict | cds | class | rewrite | section_gate`.
+Disagreement rows require `proposed_surface` A–E.
+
+```text
+pimp-mod gold add --id <record_id> --line <Section:index> --label … --scope … --reason "…" [--surface A-E]
+pimp-mod gold list [--label miss|false_positive|partial] [--backlog]
+pimp-mod gold export [--out data/gold-labels.jsonl]
+```
+
+Historical migrate: `lyr_c8fc77yu` Chorus:0 → `gold_ii47v36h` pass/verdict.
+
+### G1 session (2026-08-24)
+
+n_gold = 6 (3 human_pd / 3 ai). n_pass=1 n_false_positive=3 n_miss=1 n_partial=1.
+
+Top backlog: `gold_34mric1f` human_pd false_positive/cds → surface B.
+
+### G5 — K2 0.2.0 (gold:gold_34mric1f → surface B)
+
+**Change:** in `cdsFor` only, concrete + token-length gate is `tokens.length >= 5` (was `> 5`) so a 5-token proper-noun line can reach CDS 3.
+
+PD BLOCK share stayed **0**. Slogan BLOCK 0.750 unchanged.
+
+| Metric | before | after |
+|---|---|---|
+| human_flag_rate | 0.750 | **0.583** |
+| cds_human | 2.250 | **2.417** |
+| block_share_human | 0 | **0** |
+
+Flips: `They call the Rising Sun` and `Her name was Barbara Allen` CONDITIONAL → PASS.
+
+Self-plug still off. Stop (G7): one gold-cited bump.

@@ -130,7 +130,7 @@ function cdsFor(line) {
   const hints = CONCRETE_HINTS.filter((c) => lower.includes(c)).length;
   const conc = hints + (midLineProperNouns(line) > 0 ? 1 : 0);
   if (conc >= 2 && abs <= 1) return 4;
-  if (conc >= 1 && tokens.length > 5) return 3;
+  if (conc >= 1 && tokens.length >= 5) return 3;
   if (conc >= 1) return 2;
   if (abs >= 2 || TIER1_PHRASES.some((p) => lower.includes(p))) return 1;
   if (tokens.length <= 5 && abs >= 1) return 1;
