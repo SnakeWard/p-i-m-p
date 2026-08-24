@@ -1,0 +1,36 @@
+{
+  "url": "http://127.0.0.1:8080/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "PIMP Studio",
+      "hasCanvas": false,
+      "bodyTextLen": 2219,
+      "bodyTextHash": "1820f915848c2c6b5eaf6f35ee596d6b337f42c0e6a89414726dfc63cc5794c9",
+      "bodyTextPrefix": "P.I.M.P. IDENTITY · TENSION · RELEASE Studio loop live Intent Sp",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "PIMP Studio",
+      "hasCanvas": false,
+      "bodyTextLen": 1767,
+      "bodyTextHash": "97f5325168804fd381ac1f7a3fa3a43f4fcb619936ec065dd40523b739390fe2",
+      "bodyTextPrefix": "P.I.M.P. Intent Spec Lyrics Sound Release Personas Module Lab Pr",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-preview.json"
+}
