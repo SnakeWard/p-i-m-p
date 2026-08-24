@@ -33,6 +33,14 @@ import {
   goldPointer,
   parseGoldJsonl,
 } from "../src/pimp/engine/gold-core.mjs";
+import { formatPersonaErrors, validatePersona } from "../src/pimp/persona/schema.ts";
+import {
+  dropPersonaFile,
+  listPersonaFiles,
+  personaRoot,
+  readPersonaFile,
+  writePersonaFile,
+} from "../src/pimp/persona/disk.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA = process.env.PIMP_MOD_DATA
@@ -44,13 +52,14 @@ const VERSIONS = process.env.PIMP_MOD_VERSIONS
 const GOLD = process.env.PIMP_MOD_GOLD
   ? path.resolve(process.env.PIMP_MOD_GOLD)
   : path.join(ROOT, "data", "gold-labels.jsonl");
+const PERSONAS = personaRoot() ?? path.join(ROOT, "data", "personas");
 
 function parseArgs(argv) {
   const raw = argv.slice(2);
   let cmd = raw[0];
   let rest = raw.slice(1);
   let sub;
-  if (cmd === "gold") {
+  if (cmd === "gold" || cmd === "persona") {
     if (rest[0] && !rest[0].startsWith("--")) {
       sub = rest[0];
       rest = rest.slice(1);
@@ -299,6 +308,62 @@ async function goldCmd(sub, flags) {
   throw new Error("gold subcommand must be add | list | export");
 }
 
+async function personaCmd(sub, flags, positionalId) {
+  const root = PERSONAS;
+  if (sub === "validate") {
+    const file = requireFile(flags.file, "--file");
+    const raw = JSON.parse(await readFile(file, "utf8"));
+    const result = validatePersona(raw);
+    if (!result.ok) {
+      console.error(formatPersonaErrors(result.errors));
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`valid ${result.persona.schema}  ${result.persona.id}  ${result.persona.name}`);
+    return;
+  }
+  if (sub === "load") {
+    const file = requireFile(flags.file, "--file");
+    const raw = JSON.parse(await readFile(file, "utf8"));
+    const result = validatePersona(raw);
+    if (!result.ok) {
+      console.error(formatPersonaErrors(result.errors));
+      process.exitCode = 1;
+      return;
+    }
+    const dest = await writePersonaFile(root, result.persona);
+    console.log(`loaded ${result.persona.id} → ${dest}`);
+    return;
+  }
+  if (sub === "list") {
+    const list = await listPersonaFiles(root);
+    if (!list.length) {
+      console.log("(no personas)");
+      return;
+    }
+    for (const e of list) {
+      console.log(`${e.id}\t${e.name}\t${e.version}\t${e.source}\t${e.updatedAt}`);
+    }
+    return;
+  }
+  if (sub === "show") {
+    const id = positionalId || flags.id;
+    if (!id || id === true) throw new Error("persona show <id>");
+    const raw = await readPersonaFile(root, id);
+    if (!raw) throw new Error(`no persona ${id}`);
+    process.stdout.write(JSON.stringify(raw, null, 2) + "\n");
+    return;
+  }
+  if (sub === "drop") {
+    const id = positionalId || flags.id;
+    if (!id || id === true) throw new Error("persona drop <id>");
+    await dropPersonaFile(root, id);
+    console.log(`dropped ${id}`);
+    return;
+  }
+  throw new Error("persona subcommand must be validate | load | list | show | drop");
+}
+
 async function bump(flags) {
   const rows = await loadAll();
   const gold = await loadGold();
@@ -343,11 +408,21 @@ const HELP = `pimp-mod — empirical K-module harness (real runK2)
   seed
   version-diff --before <file> --after <file>
   bump    --module K2 [--notes <text>] [--diff <file>] [--force-unreviewed]
+  persona validate --file <path>
+  persona load     --file <path>
+  persona list
+  persona show <id>
+  persona drop <id>
 
 Collections never mix. Gold lives in data/gold-labels.jsonl (predictions frozen).
+Personas: pimp.persona.v1 in data/personas/<id>.json
 `;
 
 const { cmd, sub, flags } = parseArgs(process.argv);
+const positionalId =
+  cmd === "persona" && (sub === "show" || sub === "drop")
+    ? process.argv.slice(3).find((a) => a !== sub && !a.startsWith("--"))
+    : undefined;
 
 try {
   if (!cmd || cmd === "help" || cmd === "-h" || cmd === "--help") {
@@ -357,6 +432,7 @@ try {
   else if (cmd === "suite") await suite(flags);
   else if (cmd === "override") await override(flags);
   else if (cmd === "gold") await goldCmd(sub, flags);
+  else if (cmd === "persona") await personaCmd(sub, flags, positionalId);
   else if (cmd === "export") await exp(flags);
   else if (cmd === "seed") await seed();
   else if (cmd === "version-diff") await diffCmd(flags);

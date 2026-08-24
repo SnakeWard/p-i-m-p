@@ -37,6 +37,7 @@
     "src/pimp/engine/k2-core.mjs",
     "src/pimp/engine/corpus-core.mjs",
     "src/pimp/engine/gold-core.mjs",
+    "src/pimp/persona/disk.mjs",
     "src/**/*.test.mjs",
     "src/**/*.test.ts"
   ]

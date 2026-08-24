@@ -36,6 +36,12 @@ export function buildStylePrompt(spec: SpecBlock) {
     `Lead vocal: ${vocal}. ${flags}`,
     `Instrumentation behavior: ${spine.instruments}${color ? `; color accents: ${color.instruments}` : ""}.`,
     sections,
+    spec.personaAnchors?.length
+      ? `Bind these objects in verse: ${spec.personaAnchors.slice(0, 6).join(", ")}.`
+      : "",
+    spec.personaForbidden?.length
+      ? `This persona never says: ${spec.personaForbidden.slice(0, 8).join("; ")}.`
+      : "",
     mix,
   ]
     .filter(Boolean)

@@ -12,16 +12,21 @@ import {
   SEED_PD,
 } from "./engine/corpus";
 import { buildGoldRow, goldPointer } from "./engine/gold-core.mjs";
-import type { GoldRow } from "./types";
+import type { GoldRow, PerformanceTarget, TropeTone } from "./types";
 import { applySilentRewrites, runK2 } from "./engine/k2";
 import { buildRelease } from "./engine/k4";
 import { scaffoldLyrics } from "./engine/scaffold-lyrics";
+import {
+  validatePersona,
+  type PersonaV1,
+  type PersonaValidateResult,
+} from "./persona/schema";
+import { SEED_PERSONAS_V1 } from "./persona/seeds";
 import type {
   CollectionId,
   ConflictAlert,
   LyricRecord,
   ModuleVersion,
-  Persona,
   ProviderConfig,
   SpecBlock,
   StudioPhase,
@@ -67,7 +72,7 @@ interface PimpState {
   conflicts: ConflictAlert[];
   tracks: Track[];
   activeId: string | null;
-  personas: Persona[];
+  personas: PersonaV1[];
   corpus: LyricRecord[];
   goldRows: GoldRow[];
   moduleVersions: ModuleVersion[];
@@ -77,6 +82,7 @@ interface PimpState {
   selfPlugOptIn: boolean;
   generating: boolean;
   lastError: string | null;
+  lastNotice: string | null;
   setPhase: (p: StudioPhase) => void;
   patchDraft: (p: Partial<SpecBlock>) => void;
   toggleMod: (mod: string) => void;
@@ -93,10 +99,11 @@ interface PimpState {
   loadExample: () => void;
   setGenerating: (v: boolean) => void;
   setLastError: (v: string | null) => void;
+  setLastNotice: (v: string | null) => void;
   applyGeneration: (lyrics: string, style?: string, providerUsed?: string) => void;
-  upsertPersona: (p: Persona) => void;
+  importPersona: (raw: unknown) => PersonaValidateResult;
   dropPersona: (id: string) => void;
-  usePersona: (id: string) => void;
+  usePersona: (id: string, opts?: { overwrite?: boolean }) => "ok" | "missing" | "needs-confirm";
   ingestText: (text: string, collection: CollectionId, provenance: string) => void;
   overrideRecord: (id: string, note: string) => void;
   addGold: (recordId: string, fields: Record<string, unknown>) => void;
@@ -114,6 +121,54 @@ function activeTrack(tracks: Track[], id: string | null) {
   return tracks.find((t) => t.id === id) ?? null;
 }
 
+const TONES: TropeTone[] = [
+  "Poetic",
+  "Plainspoken",
+  "Violent",
+  "Tender",
+  "Ironic",
+  "Character Voice",
+];
+const PERFS: PerformanceTarget[] = [
+  "streaming",
+  "radio",
+  "short-form",
+  "trailer",
+  "club",
+  "sync",
+];
+
+function bindPersonaToSpec(draft: SpecBlock, p: PersonaV1): SpecBlock {
+  const tone = TONES.includes(p.defaults.trope_tone as TropeTone)
+    ? (p.defaults.trope_tone as TropeTone)
+    : "Character Voice";
+  const perf = PERFS.includes(p.voice.performance_target as PerformanceTarget)
+    ? (p.voice.performance_target as PerformanceTarget)
+    : draft.performanceTarget;
+  return {
+    ...draft,
+    persona: p.name,
+    genreSpine: p.defaults.genre_spine,
+    genreColor: p.defaults.genre_color,
+    tropeCheck: p.defaults.trope_check,
+    tropeTone: tone,
+    vocalProtocol: p.voice.vocal_protocol,
+    performanceTarget: perf,
+    emotionPath: p.defaults.emotion_path,
+    narrativeArc: p.defaults.narrative_arc,
+    personaAnchors: [...p.anchors.objects, ...p.anchors.places, ...p.anchors.actions],
+    personaForbidden: [...p.voice.forbidden],
+  };
+}
+
+function specHasBindableWork(d: SpecBlock) {
+  return Boolean(d.title.trim() || d.intent.trim() || (d.persona && d.persona !== "—"));
+}
+
+function personaForSpec(personas: PersonaV1[], spec: SpecBlock) {
+  return personas.find((p) => p.name === spec.persona || spec.persona.includes(p.id)) ?? null;
+}
+
 const BASE_SPEC: SpecBlock = {
   ...EMPTY_SPEC,
   genreSpine: "Pop (streaming-era)",
@@ -127,28 +182,7 @@ export const usePimp = create<PimpState>()(
       conflicts: [],
       tracks: [],
       activeId: null,
-      personas: [
-        {
-          id: "persona_vesper",
-          name: "Vesper Hollow",
-          voice:
-            "female, late 20s, raspy but intimate, restrained then emotionally fragile; close-mic, worn, rarely belts until the last chorus",
-          visual:
-            "lantern dusk, dust, old wood, wide lonely frames, brimmed-hat shadow, no glamour",
-          houseTemplate: "Heartland Rock / Country Rock",
-          createdAt: "2026-07-01T00:00:00.000Z",
-        },
-        {
-          id: "persona_ash",
-          name: "Ash Calder",
-          voice:
-            "male, early 30s, close-mic, worn, vulnerable; tight 2nd male harmony above lead in chorus; never glossy autotune",
-          visual:
-            "smoke, scratched metal, stage haze, hard edge highlights, heavy negative space",
-          houseTemplate: "Radio Rock / Alt Rock",
-          createdAt: "2026-07-01T00:00:00.000Z",
-        },
-      ],
+      personas: SEED_PERSONAS_V1,
       corpus: SEED_PD.map((s) => makeRecord({ ...s, humanOverride: s.humanOverride ?? "" })),
       goldRows: [],
       moduleVersions: [],
@@ -158,6 +192,7 @@ export const usePimp = create<PimpState>()(
       selfPlugOptIn: false,
       generating: false,
       lastError: null,
+      lastNotice: null,
       setPhase: (phase) => set({ phase }),
       patchDraft: (p) => set({ draft: { ...get().draft, ...p } }),
       toggleMod: (mod) => {
@@ -174,7 +209,7 @@ export const usePimp = create<PimpState>()(
       },
       lockSpec: () => {
         const spec = architectSpec(get().draft);
-        const conflicts = scanConflicts(spec);
+        const conflicts = scanConflicts(spec, personaForSpec(get().personas, spec));
         const style = buildStylePrompt(spec);
         const current = activeTrack(get().tracks, get().activeId);
         const track: Track = current
@@ -265,7 +300,7 @@ export const usePimp = create<PimpState>()(
           activeId: id,
           draft: t.spec,
           phase: "spec",
-          conflicts: scanConflicts(t.spec),
+          conflicts: scanConflicts(t.spec, personaForSpec(get().personas, t.spec)),
         });
       },
       newTrack: () => {
@@ -311,7 +346,7 @@ export const usePimp = create<PimpState>()(
         };
         set({
           draft: spec,
-          conflicts: scanConflicts(spec),
+          conflicts: scanConflicts(spec, personaForSpec(get().personas, spec)),
           tracks: [track, ...get().tracks],
           activeId: track.id,
           phase: "lyrics",
@@ -319,6 +354,7 @@ export const usePimp = create<PimpState>()(
       },
       setGenerating: (generating) => set({ generating }),
       setLastError: (lastError) => set({ lastError }),
+      setLastNotice: (lastNotice: string | null) => set({ lastNotice }),
       applyGeneration: (lyrics, style, providerUsed) => {
         const t = activeTrack(get().tracks, get().activeId);
         if (!t) return;
@@ -345,26 +381,43 @@ export const usePimp = create<PimpState>()(
         });
         if (get().selfPlugOptIn) get().selfPlugActive();
       },
-      upsertPersona: (p) => {
+      importPersona: (raw) => {
+        const result = validatePersona(raw);
+        if (!result.ok) {
+          set({ lastError: result.errors.map((e) => `${e.field}: ${e.message}`).join(" · ") });
+          return result;
+        }
+        const p = result.persona;
         const exists = get().personas.some((x) => x.id === p.id);
         set({
           personas: exists
             ? get().personas.map((x) => (x.id === p.id ? p : x))
             : [p, ...get().personas],
+          lastError: null,
+          lastNotice: `Loaded ${p.name} (${p.id})`,
         });
+        return result;
       },
-      dropPersona: (id) => set({ personas: get().personas.filter((p) => p.id !== id) }),
-      usePersona: (id) => {
-        const p = get().personas.find((x) => x.id === id);
-        if (!p) return;
+      dropPersona: (id) =>
         set({
-          draft: {
-            ...get().draft,
-            persona: p.name,
-            vocalProtocol: p.voice,
-            structureTemplate: p.houseTemplate || get().draft.structureTemplate,
-          },
+          personas: get().personas.filter((p) => p.id !== id),
+          lastNotice: `Dropped ${id}`,
+        }),
+      usePersona: (id, opts) => {
+        const p = get().personas.find((x) => x.id === id);
+        if (!p) return "missing";
+        const draft = get().draft;
+        if (specHasBindableWork(draft) && draft.persona !== p.name && !opts?.overwrite) {
+          return "needs-confirm";
+        }
+        const next = bindPersonaToSpec(draft, p);
+        set({
+          draft: next,
+          conflicts: scanConflicts(next, p),
+          lastNotice: `Using ${p.name}`,
+          lastError: null,
         });
+        return "ok";
       },
       ingestText: (text, collection, provenance) => {
         try {
@@ -480,6 +533,29 @@ export const usePimp = create<PimpState>()(
     {
       name: "pimp-console-v1",
       skipHydration: true,
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as typeof current;
+        const raw = p.personas;
+        const v1 = Array.isArray(raw)
+          ? (raw.filter(
+              (x) =>
+                x &&
+                typeof x === "object" &&
+                (x as { schema?: string }).schema === "pimp.persona.v1",
+            ) as PersonaV1[])
+          : [];
+        return {
+          ...current,
+          ...p,
+          personas: v1.length ? v1 : current.personas,
+          draft: {
+            ...current.draft,
+            ...p.draft,
+            personaAnchors: p.draft?.personaAnchors ?? current.draft.personaAnchors ?? [],
+            personaForbidden: p.draft?.personaForbidden ?? current.draft.personaForbidden ?? [],
+          },
+        };
+      },
       partialize: (s) => ({
         draft: s.draft,
         tracks: s.tracks,

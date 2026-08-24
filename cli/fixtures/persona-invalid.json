@@ -1,0 +1,37 @@
+{
+  "schema": "pimp.persona.v1",
+  "id": "broken-persona",
+  "name": "Broken",
+  "version": "1.0.0",
+  "createdAt": "2026-08-24T00:00:00.000Z",
+  "source": "llm",
+  "identity": {
+    "one_line": "A mood without a job",
+    "point_of_view": "first",
+    "register": "vague"
+  },
+  "voice": {
+    "vocal_protocol": "sings",
+    "performance_target": "streaming",
+    "diction": [],
+    "forbidden": "not-an-array"
+  },
+  "defaults": {
+    "genre_spine": "Pop",
+    "genre_color": "none",
+    "trope_check": "standard",
+    "trope_tone": "Poetic",
+    "emotion_path": "up",
+    "narrative_arc": "Chaos → Control"
+  },
+  "anchors": {
+    "objects": ["one", "two"],
+    "places": [],
+    "actions": []
+  },
+  "constraints": {
+    "one_intent_rule": true,
+    "max_abstraction": "low",
+    "must_bind_objects_in_verse": true
+  }
+}

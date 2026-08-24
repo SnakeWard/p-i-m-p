@@ -14,8 +14,8 @@
     "preview": "node scripts/with-app-env.mjs vite preview",
     "typecheck": "tsc --noEmit",
     "check:auth": "node scripts/check-auth-invariant.mjs",
-    "test": "node --test \"scripts/**/*.test.mjs\" src/pimp/engine/corpus-core.test.mjs src/pimp/engine/gold-core.test.mjs cli/pimp-mod.test.mjs && node --experimental-strip-types --test src/lib/app-data/app-data.test.ts src/lib/auth/gate-identity.test.ts",
-    "pimp-mod": "node cli/pimp-mod.mjs",
+    "test": "node --test \"scripts/**/*.test.mjs\" src/pimp/engine/corpus-core.test.mjs src/pimp/engine/gold-core.test.mjs cli/pimp-mod.test.mjs && node --experimental-strip-types --test src/lib/app-data/app-data.test.ts src/lib/auth/gate-identity.test.ts src/pimp/persona/schema.test.ts",
+    "pimp-mod": "node --experimental-strip-types cli/pimp-mod.mjs",
     "lint": "eslint .",
     "format": "prettier --write ."
   },

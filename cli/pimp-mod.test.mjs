@@ -18,16 +18,21 @@ async function run(args, envExtra = {}) {
   const data = path.join(tmp, "pimp-mod.jsonl");
   const versions = path.join(tmp, "module-versions.jsonl");
   const gold = path.join(tmp, "gold-labels.jsonl");
+  const personas = path.join(tmp, "personas");
   const env = {
     ...process.env,
     PIMP_MOD_DATA: data,
     PIMP_MOD_VERSIONS: versions,
     PIMP_MOD_GOLD: gold,
+    PIMP_MOD_PERSONAS: personas,
     ...envExtra,
   };
   const invoke = async (argv) => {
     try {
-      const r = await execFileAsync(process.execPath, [CLI, ...argv], {
+      const r = await execFileAsync(
+        process.execPath,
+        ["--experimental-strip-types", CLI, ...argv],
+        {
         cwd: ROOT,
         env,
         timeout: 20000,
@@ -245,5 +250,35 @@ describe("pimp-mod CLI", () => {
     assert.equal(row.proposed_surface, "C");
     assert.ok(row.reason);
     assert.equal(row.record_id, rec.id);
+  });
+
+  it("persona validate/load/list/show/drop round-trip", async () => {
+    const { invoke, tmp } = await run();
+    const valid = path.join(ROOT, "data", "personas", "_example.json");
+    const invalid = path.join(ROOT, "cli", "fixtures", "persona-invalid.json");
+    const bad = await invoke(["persona", "validate", "--file", invalid]);
+    assert.notEqual(bad.code, 0);
+    assert.match(bad.stderr, /anchors\.objects/);
+
+    const ok = await invoke(["persona", "validate", "--file", valid]);
+    assert.equal(ok.code, 0, ok.stderr);
+    assert.match(ok.stdout, /vesper-hollow/);
+
+    const loaded = await invoke(["persona", "load", "--file", valid]);
+    assert.equal(loaded.code, 0, loaded.stderr);
+    const listed = await invoke(["persona", "list"]);
+    assert.match(listed.stdout, /vesper-hollow/);
+    const shown = await invoke(["persona", "show", "vesper-hollow"]);
+    assert.match(shown.stdout, /pimp\.persona\.v1/);
+    const dropped = await invoke(["persona", "drop", "vesper-hollow"]);
+    assert.equal(dropped.code, 0, dropped.stderr);
+    const after = await invoke(["persona", "list"]);
+    assert.match(after.stdout, /\(no personas\)/);
+    const dir = path.join(tmp, "personas");
+    const files = await import("node:fs/promises").then((fs) => fs.readdir(dir).catch(() => []));
+    assert.equal(
+      files.filter((f) => f.endsWith(".json") && f !== "index.json").length,
+      0,
+    );
   });
 });

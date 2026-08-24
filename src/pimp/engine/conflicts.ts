@@ -1,8 +1,9 @@
 import type { ConflictAlert, SpecBlock } from "../types";
+import { personaIntentConflict, type PersonaV1 } from "../persona/schema";
 import { getGenre } from "../knowledge/genres";
 import { getTemplate } from "../knowledge/structures";
 
-export function detectConflicts(spec: SpecBlock): ConflictAlert[] {
+export function detectConflicts(spec: SpecBlock, persona?: PersonaV1 | null): ConflictAlert[] {
   const alerts: ConflictAlert[] = [];
   const genre = getGenre(spec.genreSpine);
   const tmpl = getTemplate(spec.structureTemplate);
@@ -64,6 +65,17 @@ export function detectConflicts(spec: SpecBlock): ConflictAlert[] {
       issue: "Pop is STRICT trope tier. Off-mode invites chorus cliché.",
       fix: "standard",
     });
+  }
+
+  if (persona && spec.intent.trim()) {
+    const fight = personaIntentConflict(spec.intent, persona);
+    if (fight) {
+      alerts.push({
+        field: "persona",
+        issue: fight.reason,
+        fix: "Rewrite intent to match identity.one_line, or pick another persona.",
+      });
+    }
   }
 
   return alerts;

@@ -44,6 +44,8 @@ export interface SpecBlock {
   tropeTone: TropeTone;
   intent: string;
   toneFlags: string[];
+  personaAnchors: string[];
+  personaForbidden: string[];
 }
 
 export interface ConflictAlert {
@@ -189,4 +191,6 @@ export const EMPTY_SPEC: SpecBlock = {
   tropeTone: "Poetic",
   intent: "",
   toneFlags: [],
+  personaAnchors: [],
+  personaForbidden: [],
 };

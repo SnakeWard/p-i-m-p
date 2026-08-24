@@ -58,6 +58,10 @@ export function formatSpec(spec: SpecBlock) {
     `TropeTone: ${spec.tropeTone}`,
     `Intent: ${spec.intent || "—"}`,
     spec.toneFlags.length ? `Tone flags: ${spec.toneFlags.join(", ")}` : "",
+    spec.personaAnchors?.length ? `Persona anchors: ${spec.personaAnchors.join(", ")}` : "",
+    spec.personaForbidden?.length
+      ? `Persona forbidden: ${spec.personaForbidden.join(", ")}`
+      : "",
   ]
     .filter(Boolean)
     .join("\n");

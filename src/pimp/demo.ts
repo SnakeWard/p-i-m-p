@@ -103,6 +103,8 @@ export function seedTracks(): Track[] {
     intent:
       "A woman in her late 20s. He pawned her ring in Reno to buy a guitar amp. She burned the amp, kept the dog, left town. Dark americana spine with cinematic scale. Concrete, no mythology.",
     toneFlags: ["darker", "cinematic"],
+    personaAnchors: ["pharmacy counter", "unsigned lease", "pawn ticket"],
+    personaForbidden: ["rise above", "shattered dreams", "neon lights"],
   };
   const persona = SEED_PERSONAS[0];
   const { report, lyrics } = runTropeCheck(RENO_LYRICS, spec);
