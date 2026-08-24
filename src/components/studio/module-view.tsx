@@ -7,14 +7,21 @@ import {
   runSuites,
   toJsonl,
 } from "@/pimp/engine/corpus";
+import {
+  GOLD_SCOPE_ENUM,
+  GOLD_SURFACES,
+  GOLD_SURFACE_NAMES,
+  goldBacklog,
+} from "@/pimp/engine/gold-core.mjs";
 import { usePimp } from "@/pimp/store";
-import type { CollectionId } from "@/pimp/types";
+import type { CollectionId, GoldLabel, GoldRow, GoldScope, GoldSurface } from "@/pimp/types";
 import { CopyBtn } from "./copy-btn";
 
 export function ModuleView() {
   const corpus = usePimp((s) => s.corpus);
+  const goldRows = usePimp((s) => s.goldRows);
   const ingest = usePimp((s) => s.ingestText);
-  const overrideRecord = usePimp((s) => s.overrideRecord);
+  const addGold = usePimp((s) => s.addGold);
   const dropRecord = usePimp((s) => s.dropRecord);
   const versions = usePimp((s) => s.moduleVersions);
   const propose = usePimp((s) => s.proposeModule);
@@ -24,18 +31,41 @@ export function ModuleView() {
   const [collection, setCollection] = useState<CollectionId>("human_pd");
   const [filter, setFilter] = useState<CollectionId | "all">("all");
   const [forceUnreviewed, setForceUnreviewed] = useState(false);
+  const [drafts, setDrafts] = useState<
+    Record<string, { label: GoldLabel; scope: GoldScope; surface: GoldSurface; reason: string }>
+  >({});
 
   const suites = useMemo(
-    () => runSuites(corpus, filter === "all" ? {} : { collection: filter }),
-    [corpus, filter],
+    () =>
+      runSuites(corpus, {
+        ...(filter === "all" ? {} : { collection: filter }),
+        gold: goldRows,
+      }),
+    [corpus, filter, goldRows],
   );
   const shown = filter === "all" ? corpus : corpus.filter((r) => r.collection === filter);
   const exportSlice = exportRecords(corpus, filter === "all" ? undefined : filter);
   const reviewLines = shown.flatMap((r) =>
     (r.annotation?.lines ?? [])
-      .filter((l) => l.verdict === "REWRITE" || l.verdict === "BLOCK")
+      .filter((l) => l.verdict === "REWRITE" || l.verdict === "BLOCK" || l.verdict === "CONDITIONAL")
       .map((l) => ({ rec: r, line: l })),
   );
+  const backlog = useMemo(() => goldBacklog(goldRows) as GoldRow[], [goldRows]);
+
+  function draftKey(recordId: string, section: string, index: number) {
+    return `${recordId}:${section}:${index}`;
+  }
+
+  function draftFor(key: string) {
+    return (
+      drafts[key] ?? {
+        label: "false_positive" as GoldLabel,
+        scope: "verdict" as GoldScope,
+        surface: "B" as GoldSurface,
+        reason: "",
+      }
+    );
+  }
 
   return (
     <div className="max-w-5xl space-y-8">
@@ -43,9 +73,8 @@ export function ModuleView() {
         <p className="text-xs uppercase tracking-[0.2em] text-muted">pimp-mod</p>
         <h1 className="font-display text-3xl mt-1">Module Lab</h1>
         <p className="text-muted mt-2 max-w-2xl leading-relaxed">
-          Public-domain / CC human lyrics only. Permissive AI only. Self-plugs stay separated.
-          Scores come from the same runK2 path as the CLI. Version bumps require a reviewed
-          sample.
+          Gold lives as full frozen rows, not chips. Prefer miss / false_positive. One surface per
+          bump. Self-plug stays off.
         </p>
       </header>
 
@@ -85,10 +114,11 @@ export function ModuleView() {
             Ingest + annotate
           </Button>
           <CopyBtn text={toJsonl(exportSlice)} label="Export JSONL" />
+          <CopyBtn
+            text={goldRows.map((g) => JSON.stringify(g)).join("\n") + (goldRows.length ? "\n" : "")}
+            label="Export gold"
+          />
         </div>
-        <p className="text-xs text-subtle">
-          Ingest stamps the selected collection. Export never re-buckets.
-        </p>
       </section>
 
       <section className="grid md:grid-cols-2 xl:grid-cols-3 gap-3">
@@ -149,29 +179,9 @@ export function ModuleView() {
                   ? `mean CDS ${(
                       r.annotation.lines.reduce((a, l) => a + l.cds, 0) /
                       Math.max(1, r.annotation.lines.length)
-                    ).toFixed(2)} · ${r.annotation.lines.filter((l) => l.verdict !== "PASS").length} flags · passed=${r.annotation.passed}`
+                    ).toFixed(2)} · ${r.annotation.lines.filter((l) => l.verdict !== "PASS").length} flags · pointer ${r.humanOverride || "—"}`
                   : "unannotated"}
               </p>
-              <div className="mt-2 flex flex-wrap gap-1">
-                {GOLD_LABELS.map((g) => (
-                  <Button
-                    key={g}
-                    type="button"
-                    size="sm"
-                    variant={r.humanOverride === g ? "primary" : "secondary"}
-                    onClick={() => overrideRecord(r.id, g)}
-                  >
-                    {g}
-                  </Button>
-                ))}
-              </div>
-              <input
-                className="mt-2 h-9 w-full rounded-[var(--radius-sm)] border border-border bg-bg-elevated px-2 text-xs"
-                placeholder="Human override / gold label (pass | false_positive | miss | free text)"
-                defaultValue={r.humanOverride}
-                key={`${r.id}:${r.humanOverride}`}
-                onBlur={(e) => overrideRecord(r.id, e.target.value)}
-              />
             </li>
           ))}
         </ul>
@@ -179,29 +189,133 @@ export function ModuleView() {
 
       <section className="space-y-3">
         <h2 className="text-sm uppercase tracking-widest text-muted">
-          Review queue · REWRITE / BLOCK
+          Review queue · BLOCK / REWRITE / CONDITIONAL
         </h2>
         {reviewLines.length === 0 ? (
-          <p className="text-xs text-muted">No rewrite/block lines in this filter.</p>
+          <p className="text-xs text-muted">No flagged lines in this filter.</p>
         ) : (
-          <ul className="space-y-2 max-h-[420px] overflow-auto">
-            {reviewLines.slice(0, 40).map(({ rec, line }) => (
-              <li
-                key={`${rec.id}-${line.section}-${line.index}`}
-                className="rounded-[var(--radius-md)] border border-border p-3 text-xs"
-              >
-                <p className="text-subtle">
-                  {rec.collection} · {rec.title} · {line.section} L{line.index + 1} ·{" "}
-                  <span className={line.verdict === "BLOCK" ? "text-fail" : "text-warn"}>
-                    {line.verdict}
-                  </span>{" "}
-                  · CDS {line.cds}
-                  {line.classes.length ? ` · ${line.classes.join(", ")}` : ""}
+          <ul className="space-y-3 max-h-[640px] overflow-auto">
+            {reviewLines.slice(0, 40).map(({ rec, line }) => {
+              const key = draftKey(rec.id, line.section, line.index);
+              const d = draftFor(key);
+              return (
+                <li
+                  key={key}
+                  className="rounded-[var(--radius-md)] border border-border p-3 text-xs space-y-2"
+                >
+                  <p className="text-subtle">
+                    {rec.collection} · {rec.title} · {line.section} L{line.index + 1} ·{" "}
+                    <span
+                      className={
+                        line.verdict === "BLOCK"
+                          ? "text-fail"
+                          : line.verdict === "REWRITE"
+                            ? "text-warn"
+                            : "text-muted"
+                      }
+                    >
+                      {line.verdict}
+                    </span>{" "}
+                    · CDS {line.cds}
+                    {line.classes.length ? ` · ${line.classes.join(", ")}` : ""}
+                  </p>
+                  <p className="text-fg">{line.line}</p>
+                  {line.rewrite ? <p className="text-muted">→ {line.rewrite}</p> : null}
+                  <div className="flex flex-wrap gap-2">
+                    <Select
+                      className="max-w-[160px]"
+                      value={d.label}
+                      onChange={(e) =>
+                        setDrafts((prev) => ({
+                          ...prev,
+                          [key]: { ...d, label: e.target.value as GoldLabel },
+                        }))
+                      }
+                    >
+                      {GOLD_LABELS.map((g) => (
+                        <option key={g} value={g}>
+                          {g}
+                        </option>
+                      ))}
+                    </Select>
+                    <Select
+                      className="max-w-[160px]"
+                      value={d.scope}
+                      onChange={(e) =>
+                        setDrafts((prev) => ({
+                          ...prev,
+                          [key]: { ...d, scope: e.target.value as GoldScope },
+                        }))
+                      }
+                    >
+                      {GOLD_SCOPE_ENUM.map((s) => (
+                        <option key={s} value={s}>
+                          {s}
+                        </option>
+                      ))}
+                    </Select>
+                    <Select
+                      className="max-w-[200px]"
+                      value={d.surface}
+                      onChange={(e) =>
+                        setDrafts((prev) => ({
+                          ...prev,
+                          [key]: { ...d, surface: e.target.value as GoldSurface },
+                        }))
+                      }
+                    >
+                      {GOLD_SURFACES.map((s) => (
+                        <option key={s} value={s}>
+                          {s} · {GOLD_SURFACE_NAMES[s as GoldSurface]}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <input
+                    className="h-9 w-full rounded-[var(--radius-sm)] border border-border bg-bg-elevated px-2 text-xs"
+                    placeholder="One-sentence reason (required)"
+                    value={d.reason}
+                    onChange={(e) =>
+                      setDrafts((prev) => ({ ...prev, [key]: { ...d, reason: e.target.value } }))
+                    }
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => {
+                      addGold(rec.id, {
+                        section: line.section,
+                        line_index: line.index,
+                        label: d.label,
+                        scope: d.scope,
+                        surface: d.surface,
+                        reason: d.reason,
+                        severity: "medium",
+                      });
+                    }}
+                  >
+                    Write gold row
+                  </Button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-sm uppercase tracking-widest text-muted">Gold backlog</h2>
+        {backlog.length === 0 ? (
+          <p className="text-xs text-muted">No miss / false_positive / partial with a surface.</p>
+        ) : (
+          <ul className="space-y-2">
+            {backlog.map((g) => (
+              <li key={g.gold_id} className="rounded-[var(--radius-md)] border border-border p-3 text-xs">
+                <p className="font-mono text-subtle">
+                  {g.gold_id} · {g.collection} · surface {g.proposed_surface} · {g.label}
                 </p>
-                <p className="mt-1 text-fg">{line.line}</p>
-                {line.rewrite ? (
-                  <p className="mt-1 text-muted">→ {line.rewrite}</p>
-                ) : null}
+                <p className="mt-1">{g.line_text}</p>
+                <p className="mt-1 text-muted">{g.reason}</p>
               </li>
             ))}
           </ul>
@@ -214,16 +328,19 @@ export function ModuleView() {
           type="button"
           variant="secondary"
           onClick={() => {
-            const over = suites.find((s) => s.name === "Self-overuse");
+            const top = backlog[0];
             propose(
               "K2",
-              "Auto-proposal from self-overuse suite. Review before accept.",
-              (over?.notes.join("\n") || "No overused terms.") +
-                "\n\nSuggested: add frequency-cap negatives for listed tokens in Style prompt layer.",
+              top
+                ? `gold:${top.gold_id} → surface ${top.proposed_surface}`
+                : "No backlog item.",
+              top
+                ? `${top.label} ${top.collection} ${top.section}:${top.line_index}\n${top.line_text}\n${top.reason}\nSurface ${top.proposed_surface}: ${GOLD_SURFACE_NAMES[top.proposed_surface as GoldSurface]}`
+                : "Empty backlog.",
             );
           }}
         >
-          Propose K2 diff from suites
+          Propose K2 from top gold
         </Button>
         <ul className="space-y-2">
           {versions.map((v) => (

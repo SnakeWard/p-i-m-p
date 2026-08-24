@@ -17,7 +17,6 @@ import {
   exportRecords,
   formatSuiteReport,
   formatVersionDiff,
-  hasReviewedSample,
   makeRecord,
   nextModuleVersion,
   parseIngest,
@@ -26,6 +25,14 @@ import {
   toJsonl,
   versionDiff,
 } from "../src/pimp/engine/corpus-core.mjs";
+import {
+  buildGoldRow,
+  filterGold,
+  formatGoldList,
+  goldBacklog,
+  goldPointer,
+  parseGoldJsonl,
+} from "../src/pimp/engine/gold-core.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DATA = process.env.PIMP_MOD_DATA
@@ -34,9 +41,21 @@ const DATA = process.env.PIMP_MOD_DATA
 const VERSIONS = process.env.PIMP_MOD_VERSIONS
   ? path.resolve(process.env.PIMP_MOD_VERSIONS)
   : path.join(ROOT, "data", "module-versions.jsonl");
+const GOLD = process.env.PIMP_MOD_GOLD
+  ? path.resolve(process.env.PIMP_MOD_GOLD)
+  : path.join(ROOT, "data", "gold-labels.jsonl");
 
 function parseArgs(argv) {
-  const [cmd, ...rest] = argv.slice(2);
+  const raw = argv.slice(2);
+  let cmd = raw[0];
+  let rest = raw.slice(1);
+  let sub;
+  if (cmd === "gold") {
+    if (rest[0] && !rest[0].startsWith("--")) {
+      sub = rest[0];
+      rest = rest.slice(1);
+    }
+  }
   const flags = {};
   for (let i = 0; i < rest.length; i++) {
     if (!rest[i].startsWith("--")) continue;
@@ -45,7 +64,7 @@ function parseArgs(argv) {
     if (next === undefined || next.startsWith("--")) flags[key] = true;
     else flags[key] = rest[++i];
   }
-  return { cmd, flags };
+  return { cmd, sub, flags };
 }
 
 async function loadAll() {
@@ -58,6 +77,18 @@ async function loadAll() {
 async function saveAll(rows) {
   await mkdir(path.dirname(DATA), { recursive: true });
   await writeFile(DATA, toJsonl(rows));
+}
+
+async function loadGold() {
+  if (!existsSync(GOLD)) return [];
+  const text = await readFile(GOLD, "utf8");
+  if (!text.trim()) return [];
+  return parseGoldJsonl(text);
+}
+
+async function saveGold(rows) {
+  await mkdir(path.dirname(GOLD), { recursive: true });
+  await writeFile(GOLD, toJsonl(rows));
 }
 
 async function loadVersions() {
@@ -127,11 +158,15 @@ async function annotate(flags) {
 
 async function suite(flags) {
   const rows = (await loadAll()).map(ensureAnnotated);
+  const gold = await loadGold();
   const collection =
     flags.collection && flags.collection !== true
       ? assertCollection(flags.collection)
       : undefined;
-  const results = runSuites(rows, collection ? { collection } : {});
+  const results = runSuites(rows, {
+    ...(collection ? { collection } : {}),
+    gold,
+  });
   if (results.length !== 5) {
     throw new Error(`suite battery must emit 5 results, got ${results.length}`);
   }
@@ -190,10 +225,85 @@ async function diffCmd(flags) {
   process.stdout.write(formatVersionDiff(report));
 }
 
+async function goldCmd(sub, flags) {
+  if (sub === "add") {
+    if (!flags.id || flags.id === true) throw new Error("--id required");
+    if (!flags.line || flags.line === true) throw new Error("--line required (Section:index)");
+    if (!flags.reason || flags.reason === true) throw new Error("--reason required");
+    const rows = (await loadAll()).map(ensureAnnotated);
+    const rec = rows.find((r) => r.id === flags.id);
+    if (!rec) throw new Error(`no record ${flags.id}`);
+    const gold = await loadGold();
+    const row = buildGoldRow(rec, {
+      label: flags.label,
+      scope: flags.scope,
+      line: flags.line,
+      reason: flags.reason,
+      surface: flags.surface,
+      severity: flags.severity && flags.severity !== true ? flags.severity : undefined,
+      reviewer: flags.reviewer && flags.reviewer !== true ? flags.reviewer : "cli",
+      desired_verdict:
+        flags["desired-verdict"] && flags["desired-verdict"] !== true
+          ? flags["desired-verdict"]
+          : undefined,
+      notes_for_rule:
+        flags["notes-for-rule"] && flags["notes-for-rule"] !== true
+          ? flags["notes-for-rule"]
+          : undefined,
+    });
+    gold.push(row);
+    await saveGold(gold);
+    const idx = rows.findIndex((r) => r.id === rec.id);
+    rows[idx] = { ...rows[idx], humanOverride: goldPointer(row.gold_id) };
+    await saveAll(rows);
+    console.log(
+      `gold add ${row.gold_id}  ${row.collection}  ${row.section}:${row.line_index}  ${row.label}/${row.label_scope}`,
+    );
+    return;
+  }
+  if (sub === "list") {
+    const gold = await loadGold();
+    const collection =
+      flags.collection && flags.collection !== true
+        ? assertCollection(flags.collection)
+        : undefined;
+    const label = flags.label && flags.label !== true ? flags.label : undefined;
+    if (flags.backlog) {
+      process.stdout.write(formatGoldList(filterGold(gold, { collection }), { backlog: true }));
+      const top = goldBacklog(filterGold(gold, { collection }))[0];
+      if (top) {
+        console.log(
+          `next H6: ${top.gold_id} → surface ${top.proposed_surface} (${top.label} ${top.collection})`,
+        );
+      }
+      return;
+    }
+    const shown = filterGold(gold, { collection, label });
+    process.stdout.write(formatGoldList(shown));
+    return;
+  }
+  if (sub === "export") {
+    const gold = await loadGold();
+    const collection =
+      flags.collection && flags.collection !== true
+        ? assertCollection(flags.collection)
+        : undefined;
+    const sliced = filterGold(gold, { collection });
+    const out =
+      flags.out && flags.out !== true ? path.resolve(flags.out) : GOLD;
+    await mkdir(path.dirname(out), { recursive: true });
+    await writeFile(out, toJsonl(sliced));
+    console.log(`wrote ${sliced.length} gold rows to ${out}`);
+    return;
+  }
+  throw new Error("gold subcommand must be add | list | export");
+}
+
 async function bump(flags) {
   const rows = await loadAll();
+  const gold = await loadGold();
   const force = Boolean(flags["force-unreviewed"]);
-  const gate = assertModuleWriteAllowed(rows, force);
+  const gate = assertModuleWriteAllowed(rows, force, gold);
   if (!gate.ok) throw new Error(gate.message);
   if (gate.forced) {
     console.warn("warning: --force-unreviewed — no gold-label sample in corpus");
@@ -208,7 +318,10 @@ async function bump(flags) {
     accepted: true,
     createdAt: new Date().toISOString(),
     forceUnreviewed: gate.forced,
-    reviewedIds: rows.filter((r) => String(r.humanOverride ?? "").trim()).map((r) => r.id),
+    reviewedIds: [
+      ...gold.map((g) => g.gold_id),
+      ...rows.filter((r) => String(r.humanOverride ?? "").trim()).map((r) => r.id),
+    ],
   };
   await appendVersion(entry);
   console.log(
@@ -221,15 +334,20 @@ const HELP = `pimp-mod — empirical K-module harness (real runK2)
   annotate [--id <id>]
   suite   [--collection <c>]
   override --id <id> --label <text>
+  gold add --id <record_id> --line <Section:index> --label <pass|false_positive|miss|partial>
+           --scope <verdict|cds|class|rewrite|section_gate> --reason "..."
+           [--surface A|B|C|D|E] [--severity high|medium|low]
+  gold list [--collection <c>] [--label miss|false_positive|partial|pass] [--backlog]
+  gold export [--out data/gold-labels.jsonl] [--collection <c>]
   export  [--out <path>] [--collection <c>]
   seed
   version-diff --before <file> --after <file>
   bump    --module K2 [--notes <text>] [--diff <file>] [--force-unreviewed]
 
-Collections never mix. human_pd is PD/CC commercial-reuse only.
+Collections never mix. Gold lives in data/gold-labels.jsonl (predictions frozen).
 `;
 
-const { cmd, flags } = parseArgs(process.argv);
+const { cmd, sub, flags } = parseArgs(process.argv);
 
 try {
   if (!cmd || cmd === "help" || cmd === "-h" || cmd === "--help") {
@@ -238,6 +356,7 @@ try {
   else if (cmd === "annotate") await annotate(flags);
   else if (cmd === "suite") await suite(flags);
   else if (cmd === "override") await override(flags);
+  else if (cmd === "gold") await goldCmd(sub, flags);
   else if (cmd === "export") await exp(flags);
   else if (cmd === "seed") await seed();
   else if (cmd === "version-diff") await diffCmd(flags);

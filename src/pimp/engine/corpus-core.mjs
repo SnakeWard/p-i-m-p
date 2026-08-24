@@ -4,6 +4,7 @@
  * CLI and Module Lab must import this module — never a second scorer.
  */
 import { runK2 } from "./k2-core.mjs";
+import { goldDetectionMetrics, goldSuiteNotes } from "./gold-core.mjs";
 
 export const COLLECTIONS = Object.freeze(["human_pd", "ai_permissive", "self_generated"]);
 
@@ -14,7 +15,7 @@ export const SELF_PLUG = Object.freeze({
   overuseHits: 4,
 });
 
-export const GOLD_LABELS = Object.freeze(["pass", "false_positive", "miss"]);
+export const GOLD_LABELS = Object.freeze(["pass", "false_positive", "miss", "partial"]);
 
 export const SUITE_NAMES = Object.freeze({
   detection: "Detection",
@@ -182,7 +183,8 @@ export function applySelfPlugRetention(records, now = Date.now()) {
   );
 }
 
-export function hasReviewedSample(records) {
+export function hasReviewedSample(records, goldRows = []) {
+  if (Array.isArray(goldRows) && goldRows.length > 0) return true;
   return records.some((r) => String(r.humanOverride ?? "").trim().length > 0);
 }
 
@@ -223,16 +225,18 @@ export function runSuites(records, options = {}) {
     working = working.filter((r) => r.collection === options.collection);
   }
   working = applySelfPlugRetention(working);
+  const gold = options.gold ?? [];
 
   const by = (c) => working.filter((r) => r.collection === c);
   const human = by("human_pd");
   const ai = by("ai_permissive");
   const self = by("self_generated");
+  const goldMetrics = goldDetectionMetrics(gold, options.collection);
 
   const detection = {
     name: SUITE_NAMES.detection,
     summary:
-      "Flag rate and n per collection. How often does K2 fire? Human overrides are gold labels.",
+      "Flag rate and n per collection. How often does K2 fire? Gold rows (not short overrides) are the label set.",
     metrics: {
       human_flag_rate: flagRate(human),
       ai_flag_rate: flagRate(ai),
@@ -240,13 +244,14 @@ export function runSuites(records, options = {}) {
       n_human: human.length,
       n_ai: ai.length,
       n_self: self.length,
+      ...goldMetrics,
     },
-    notes: working
-      .filter((r) => String(r.humanOverride ?? "").trim())
-      .map(
-        (r) =>
-          `${r.collection} · ${r.title}: gold “${r.humanOverride}”`,
-      ),
+    notes: [
+      ...goldSuiteNotes(gold),
+      ...working
+        .filter((r) => String(r.humanOverride ?? "").trim())
+        .map((r) => `${r.collection} · ${r.title}: pointer “${r.humanOverride}”`),
+    ],
   };
 
   const genre = {
@@ -544,8 +549,8 @@ export function nextModuleVersion(existing) {
   return `0.${n}.0`;
 }
 
-export function assertModuleWriteAllowed(records, forceUnreviewed) {
-  if (hasReviewedSample(records)) return { ok: true, forced: false };
+export function assertModuleWriteAllowed(records, forceUnreviewed, goldRows = []) {
+  if (hasReviewedSample(records, goldRows)) return { ok: true, forced: false };
   if (forceUnreviewed) {
     return { ok: true, forced: true };
   }

@@ -17,10 +17,12 @@ async function run(args, envExtra = {}) {
   const tmp = await mkdtemp(path.join(os.tmpdir(), "pimp-mod-"));
   const data = path.join(tmp, "pimp-mod.jsonl");
   const versions = path.join(tmp, "module-versions.jsonl");
+  const gold = path.join(tmp, "gold-labels.jsonl");
   const env = {
     ...process.env,
     PIMP_MOD_DATA: data,
     PIMP_MOD_VERSIONS: versions,
+    PIMP_MOD_GOLD: gold,
     ...envExtra,
   };
   const invoke = async (argv) => {
@@ -30,17 +32,18 @@ async function run(args, envExtra = {}) {
         env,
         timeout: 20000,
       });
-      return { code: 0, stdout: r.stdout, stderr: r.stderr, data };
+      return { code: 0, stdout: r.stdout, stderr: r.stderr, data, gold };
     } catch (e) {
       return {
         code: e.code ?? 1,
         stdout: e.stdout ?? "",
         stderr: e.stderr ?? e.message,
         data,
+        gold,
       };
     }
   };
-  return { tmp, data, versions, invoke };
+  return { tmp, data, versions, gold, invoke };
 }
 
 describe("pimp-mod CLI", () => {
@@ -121,7 +124,7 @@ describe("pimp-mod CLI", () => {
 
     const suite = await invoke(["suite"]);
     assert.equal(suite.code, 0, suite.stderr);
-    assert.match(suite.stdout, /gold .pass./);
+    assert.match(suite.stdout, /pointer .pass./);
 
     const tmpPlain = path.join(path.dirname(data), "plain.txt");
     await writeFile(tmpPlain, "[Verse 1]\nThe porch light is still on\nI left the key on the meter\n");
@@ -204,5 +207,43 @@ describe("pimp-mod CLI", () => {
     const ok = await invoke(["bump", "--module", "K2", "--notes", "reviewed"]);
     assert.equal(ok.code, 0, ok.stderr);
     assert.match(ok.stdout, /bumped K2/);
+  });
+
+  it("gold add writes a frozen row; list/export/suite n_gold work", async () => {
+    const { invoke, data, gold } = await run();
+    await invoke(["ingest", "--source", "ai_permissive", "--file", SLOGAN]);
+    const rec = JSON.parse((await readFile(data, "utf8")).split("\n").find(Boolean));
+    const add = await invoke([
+      "gold",
+      "add",
+      "--id",
+      rec.id,
+      "--line",
+      "Chorus:3",
+      "--label",
+      "miss",
+      "--scope",
+      "rewrite",
+      "--surface",
+      "C",
+      "--reason",
+      "rewrite equals the original slogan line",
+    ]);
+    assert.equal(add.code, 0, add.stderr);
+    assert.match(add.stdout, /gold add gold_/);
+    const listed = await invoke(["gold", "list", "--label", "miss"]);
+    assert.match(listed.stdout, /miss\/rewrite/);
+    const suite = await invoke(["suite"]);
+    assert.match(suite.stdout, /n_gold: 1/);
+    assert.match(suite.stdout, /n_miss: 1/);
+    const out = path.join(path.dirname(gold), "gold-out.jsonl");
+    const exp = await invoke(["gold", "export", "--out", out]);
+    assert.equal(exp.code, 0, exp.stderr);
+    const row = JSON.parse((await readFile(out, "utf8")).split("\n").find(Boolean));
+    assert.equal(row.label, "miss");
+    assert.equal(row.label_scope, "rewrite");
+    assert.equal(row.proposed_surface, "C");
+    assert.ok(row.reason);
+    assert.equal(row.record_id, rec.id);
   });
 });

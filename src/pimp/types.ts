@@ -130,6 +130,39 @@ export interface LyricRecord {
   specSnapshot: Partial<SpecBlock> | null;
 }
 
+export type GoldLabel = "pass" | "false_positive" | "miss" | "partial";
+export type GoldScope = "verdict" | "cds" | "class" | "rewrite" | "section_gate";
+export type GoldSurface = "A" | "B" | "C" | "D" | "E";
+
+export interface GoldRow {
+  gold_id: string;
+  record_id: string;
+  collection: CollectionId;
+  section: string;
+  line_index: number;
+  line_text: string;
+  pred_verdict: string | null;
+  pred_cds: number | null;
+  pred_classes: string[];
+  pred_note: string;
+  pred_rewrite: string | null;
+  spec_trope_check: string;
+  spec_spine: string;
+  spec_color: string;
+  label: GoldLabel;
+  label_scope: GoldScope;
+  reason: string;
+  labeled_at: string;
+  severity?: string;
+  reviewer?: string;
+  desired_verdict?: string;
+  desired_cds_min?: number;
+  desired_cds_max?: number;
+  desired_classes?: string[];
+  notes_for_rule?: string;
+  proposed_surface?: GoldSurface;
+}
+
 export interface ModuleVersion {
   id: string;
   module: string;

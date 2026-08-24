@@ -160,7 +160,7 @@ describe("H4 suite battery", () => {
     assert.ok("human_flag_rate" in det.metrics);
     assert.ok("ai_flag_rate" in det.metrics);
     assert.ok("n_human" in det.metrics);
-    assert.ok(det.notes.some((n) => n.includes("gold") && n.includes("false_positive")));
+    assert.ok(det.notes.some((n) => n.includes("false_positive")));
 
     const genre = results[1];
     assert.ok("block_share" in genre.metrics);

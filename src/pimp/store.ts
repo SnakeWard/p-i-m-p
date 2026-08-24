@@ -11,6 +11,8 @@ import {
   parseIngest,
   SEED_PD,
 } from "./engine/corpus";
+import { buildGoldRow, goldPointer } from "./engine/gold-core.mjs";
+import type { GoldRow } from "./types";
 import { applySilentRewrites, runK2 } from "./engine/k2";
 import { buildRelease } from "./engine/k4";
 import { scaffoldLyrics } from "./engine/scaffold-lyrics";
@@ -67,6 +69,7 @@ interface PimpState {
   activeId: string | null;
   personas: Persona[];
   corpus: LyricRecord[];
+  goldRows: GoldRow[];
   moduleVersions: ModuleVersion[];
   providers: ProviderConfig[];
   defaultGenerateProvider: string;
@@ -96,6 +99,7 @@ interface PimpState {
   usePersona: (id: string) => void;
   ingestText: (text: string, collection: CollectionId, provenance: string) => void;
   overrideRecord: (id: string, note: string) => void;
+  addGold: (recordId: string, fields: Record<string, unknown>) => void;
   dropRecord: (id: string) => void;
   selfPlugActive: () => void;
   pruneSelfPlugs: () => void;
@@ -146,6 +150,7 @@ export const usePimp = create<PimpState>()(
         },
       ],
       corpus: SEED_PD.map((s) => makeRecord({ ...s, humanOverride: s.humanOverride ?? "" })),
+      goldRows: [],
       moduleVersions: [],
       providers: DEFAULT_PROVIDERS,
       defaultGenerateProvider: "grok",
@@ -373,6 +378,25 @@ export const usePimp = create<PimpState>()(
         set({
           corpus: get().corpus.map((r) => (r.id === id ? { ...r, humanOverride: note } : r)),
         }),
+      addGold: (recordId, fields) => {
+        const rec = get().corpus.find((r) => r.id === recordId);
+        if (!rec) {
+          set({ lastError: `no record ${recordId}` });
+          return;
+        }
+        try {
+          const row = buildGoldRow(rec, { ...fields, reviewer: "studio" }) as GoldRow;
+          set({
+            goldRows: [row, ...get().goldRows],
+            corpus: get().corpus.map((r) =>
+              r.id === recordId ? { ...r, humanOverride: goldPointer(row.gold_id) } : r,
+            ),
+            lastError: null,
+          });
+        } catch (e) {
+          set({ lastError: e instanceof Error ? e.message : String(e) });
+        }
+      },
       dropRecord: (id) => set({ corpus: get().corpus.filter((r) => r.id !== id) }),
       selfPlugActive: () => {
         const t = activeTrack(get().tracks, get().activeId);
@@ -419,7 +443,11 @@ export const usePimp = create<PimpState>()(
         set({ moduleVersions: [v, ...get().moduleVersions] });
       },
       acceptModule: (id, opts) => {
-        const gate = assertModuleWriteAllowed(get().corpus, opts?.forceUnreviewed);
+        const gate = assertModuleWriteAllowed(
+          get().corpus,
+          opts?.forceUnreviewed,
+          get().goldRows,
+        );
         if (!gate.ok) {
           set({ lastError: gate.message ?? "module write blocked" });
           return;
@@ -440,7 +468,7 @@ export const usePimp = create<PimpState>()(
                   notes: gate.forced
                     ? `${m.notes}\n[force-unreviewed]`.trim()
                     : m.notes,
-                  diff: hasReviewedSample(get().corpus)
+                  diff: hasReviewedSample(get().corpus, get().goldRows)
                     ? m.diff
                     : `${m.diff}\n\n[force-unreviewed]`.trim(),
                 }
@@ -458,6 +486,7 @@ export const usePimp = create<PimpState>()(
         activeId: s.activeId,
         personas: s.personas,
         corpus: s.corpus,
+        goldRows: s.goldRows,
         moduleVersions: s.moduleVersions,
         providers: s.providers,
         defaultGenerateProvider: s.defaultGenerateProvider,

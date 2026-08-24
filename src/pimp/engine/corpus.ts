@@ -70,13 +70,13 @@ export function applySelfPlugRetention(records: LyricRecord[], now?: number): Ly
   return core.applySelfPlugRetention(records, now) as LyricRecord[];
 }
 
-export function hasReviewedSample(records: LyricRecord[]): boolean {
-  return core.hasReviewedSample(records);
+export function hasReviewedSample(records: LyricRecord[], goldRows?: unknown[]): boolean {
+  return core.hasReviewedSample(records, goldRows);
 }
 
 export function runSuites(
   records: LyricRecord[],
-  options?: { collection?: CollectionId },
+  options?: { collection?: CollectionId; gold?: unknown[] },
 ): SuiteResult[] {
   return core.runSuites(records, options) as SuiteResult[];
 }
@@ -127,6 +127,7 @@ export function nextModuleVersion(existing: unknown[]): string {
 export function assertModuleWriteAllowed(
   records: LyricRecord[],
   forceUnreviewed?: boolean,
+  goldRows?: unknown[],
 ): { ok: boolean; forced: boolean; message?: string } {
-  return core.assertModuleWriteAllowed(records, forceUnreviewed);
+  return core.assertModuleWriteAllowed(records, forceUnreviewed, goldRows);
 }
