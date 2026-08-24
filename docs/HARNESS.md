@@ -68,3 +68,42 @@ Self-plug remains **off**. Do not enable until N0 + N2 + ≥3 gold labels (N4).
 
 `humanOverride` is the only gold field. Detection notes print `collection · title: gold "…"`.
 Bump is blocked until at least one reviewed sample exists.
+
+### N1 review (2026-08-24)
+
+| Field | Value |
+|---|---|
+| record id | `lyr_c8fc77yu` |
+| collection | `ai_permissive` |
+| line | We will rise above the pain |
+| verdict / CDS / classes | BLOCK / 0 / FC-5 |
+| humanOverride | `pass` |
+| reason | Portable slogan with no scene, object, or time — K2 veto is correct. |
+
+Detection notes after override: `ai_permissive · Portable slogan (synthetic, permissive): gold “pass”`. Bump is no longer blocked.
+
+---
+
+## N2 — K2 0.1.0 (CDS heuristic only)
+
+**Surface:** B. CDS heuristic. No phrase-list, rewrite-map, or section-gate edits.
+
+**Change:** mid-line Proper Nouns (skip the line-initial capital) count as one concrete signal inside `cdsFor` only. `CONCRETE_HINTS` is unchanged so verse/section gates do not move.
+
+**Human sign-off:** accepted. PD folk BLOCK share stayed 0.
+
+| Metric | before | after | delta |
+|---|---|---|---|
+| human_flag_rate | 1.000 | 0.750 | −0.250 |
+| cds_human | 2.000 | 2.250 | +0.250 |
+| block_share_human | 0 | 0 | 0 |
+| block_share_ai | 0.750 | 0.750 | 0 |
+| rewrite_needed / offered | 4 / 4 | 4 / 4 | 0 |
+
+Line flips (3), all `human_pd` CONDITIONAL → PASS:
+
+- House of the Rising Sun L1: There is a house in New Orleans
+- House of the Rising Sun L4: And God, I know I'm one
+- Barbara Allen L1: In Scarlet Town where I was born
+
+Slogan collection unchanged. Self-plug still off. Stop (N5): one measured bump.

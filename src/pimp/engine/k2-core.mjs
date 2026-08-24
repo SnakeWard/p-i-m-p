@@ -116,12 +116,19 @@ export function parseSections(lyrics) {
   return sections.filter((s) => s.lines.length > 0);
 }
 
+/** Mid-line Proper Nouns (skip line-initial cap). CDS-only — not a section-gate hint. */
+function midLineProperNouns(line) {
+  const words = line.trim().split(/\s+/);
+  return words.slice(1).filter((w) => /^[A-Z][a-z]{2,}/.test(w.replace(/[^A-Za-z]/g, ""))).length;
+}
+
 function cdsFor(line) {
   const lower = line.toLowerCase();
   if (GENERIC_SLOGANS.some((r) => r.test(line))) return 0;
   const tokens = tokenize(line);
   const abs = tokens.filter((t) => ABSTRACT.includes(t)).length;
-  const conc = CONCRETE_HINTS.filter((c) => lower.includes(c)).length;
+  const hints = CONCRETE_HINTS.filter((c) => lower.includes(c)).length;
+  const conc = hints + (midLineProperNouns(line) > 0 ? 1 : 0);
   if (conc >= 2 && abs <= 1) return 4;
   if (conc >= 1 && tokens.length > 5) return 3;
   if (conc >= 1) return 2;
