@@ -3,7 +3,14 @@ import { persist } from "zustand/middleware";
 import { nowIso, uid } from "@/lib/utils";
 import { architectSpec, buildStylePrompt } from "./engine/architect";
 import { scanConflicts } from "./engine/conflicts";
-import { makeRecord, SEED_PD } from "./engine/corpus";
+import {
+  applySelfPlugRetention,
+  assertModuleWriteAllowed,
+  hasReviewedSample,
+  makeRecord,
+  parseIngest,
+  SEED_PD,
+} from "./engine/corpus";
 import { applySilentRewrites, runK2 } from "./engine/k2";
 import { buildRelease } from "./engine/k4";
 import { scaffoldLyrics } from "./engine/scaffold-lyrics";
@@ -96,7 +103,7 @@ interface PimpState {
   setDefaultProvider: (kind: "generate" | "eval", id: string) => void;
   setSelfPlugOptIn: (v: boolean) => void;
   proposeModule: (module: string, notes: string, diff: string) => void;
-  acceptModule: (id: string) => void;
+  acceptModule: (id: string, opts?: { forceUnreviewed?: boolean }) => void;
 }
 
 function activeTrack(tracks: Track[], id: string | null) {
@@ -355,20 +362,12 @@ export const usePimp = create<PimpState>()(
         });
       },
       ingestText: (text, collection, provenance) => {
-        const rec = makeRecord({
-          collection,
-          title: provenance.slice(0, 48) || "ingest",
-          lyrics: text,
-          provenance,
-          license:
-            collection === "human_pd"
-              ? "PD/CC-attested"
-              : collection === "self_generated"
-                ? "self"
-                : "permissive-attested",
-          humanOverride: "",
-        });
-        set({ corpus: [rec, ...get().corpus] });
+        try {
+          const incoming = parseIngest(text, collection, provenance);
+          set({ corpus: [...incoming, ...get().corpus], lastError: null });
+        } catch (e) {
+          set({ lastError: e instanceof Error ? e.message : String(e) });
+        }
       },
       overrideRecord: (id, note) =>
         set({
@@ -380,31 +379,21 @@ export const usePimp = create<PimpState>()(
         if (!t?.lyrics) return;
         const rec = makeRecord({
           collection: "self_generated",
-          title: t.spec.title,
+          title: t.spec.title || "self-plug",
           lyrics: t.lyrics,
-          provenance: `self-plug ${t.id}`,
+          provenance: `self-plug ${t.id} ${nowIso()}`,
           license: "self",
           humanOverride: "",
           specSnapshot: t.spec,
         });
-        const others = get().corpus.filter((r) => r.collection !== "self_generated");
-        const cutoff = Date.now() - 90 * 24 * 3600 * 1000;
-        const self = [rec, ...get().corpus.filter((r) => r.collection === "self_generated")]
-          .filter((r) => new Date(r.createdAt).getTime() > cutoff)
-          .slice(0, 20);
+        const merged = applySelfPlugRetention([rec, ...get().corpus]);
         set({
-          corpus: [...self, ...others],
+          corpus: merged,
           tracks: get().tracks.map((x) => (x.id === t.id ? { ...x, selfPlugged: true } : x)),
         });
       },
       pruneSelfPlugs: () => {
-        const cutoff = Date.now() - 90 * 24 * 3600 * 1000;
-        set({
-          corpus: get().corpus.filter(
-            (r) =>
-              r.collection !== "self_generated" || new Date(r.createdAt).getTime() > cutoff,
-          ),
-        });
+        set({ corpus: applySelfPlugRetention(get().corpus) });
       },
       setProviderKey: (id, key) =>
         set({
@@ -429,14 +418,36 @@ export const usePimp = create<PimpState>()(
         };
         set({ moduleVersions: [v, ...get().moduleVersions] });
       },
-      acceptModule: (id) =>
+      acceptModule: (id, opts) => {
+        const gate = assertModuleWriteAllowed(get().corpus, opts?.forceUnreviewed);
+        if (!gate.ok) {
+          set({ lastError: gate.message ?? "module write blocked" });
+          return;
+        }
+        if (gate.forced) {
+          console.warn("warning: force-unreviewed module accept — no gold-label sample");
+        }
         set({
+          lastError: gate.forced
+            ? "Accepted with --force-unreviewed (no gold-label sample)."
+            : null,
           moduleVersions: get().moduleVersions.map((m) =>
             m.id === id
-              ? { ...m, accepted: true, version: m.version.replace("-proposed", "") }
+              ? {
+                  ...m,
+                  accepted: true,
+                  version: m.version.replace("-proposed", ""),
+                  notes: gate.forced
+                    ? `${m.notes}\n[force-unreviewed]`.trim()
+                    : m.notes,
+                  diff: hasReviewedSample(get().corpus)
+                    ? m.diff
+                    : `${m.diff}\n\n[force-unreviewed]`.trim(),
+                }
               : m,
           ),
-        }),
+        });
+      },
     }),
     {
       name: "pimp-console-v1",

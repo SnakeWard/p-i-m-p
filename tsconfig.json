@@ -32,5 +32,11 @@
   "include": [
     "src",
     "server"
+  ],
+  "exclude": [
+    "src/pimp/engine/k2-core.mjs",
+    "src/pimp/engine/corpus-core.mjs",
+    "src/**/*.test.mjs",
+    "src/**/*.test.ts"
   ]
 }

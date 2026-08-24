@@ -72,7 +72,7 @@ export function ProvidersView() {
           checked={optIn}
           onChange={(e) => setOpt(e.target.checked)}
         />
-        Auto self-plug last generations (cap 20 / 90 days)
+        Auto self-plug last generations (opt-in; cap 20 or 90-day drop — not unbounded)
       </label>
     </div>
   );

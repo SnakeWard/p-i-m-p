@@ -1,7 +1,12 @@
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Label, Select, Textarea } from "@/components/ui/field";
-import { runSuites, toJsonl } from "@/pimp/engine/corpus";
+import {
+  exportRecords,
+  GOLD_LABELS,
+  runSuites,
+  toJsonl,
+} from "@/pimp/engine/corpus";
 import { usePimp } from "@/pimp/store";
 import type { CollectionId } from "@/pimp/types";
 import { CopyBtn } from "./copy-btn";
@@ -14,12 +19,23 @@ export function ModuleView() {
   const versions = usePimp((s) => s.moduleVersions);
   const propose = usePimp((s) => s.proposeModule);
   const accept = usePimp((s) => s.acceptModule);
+  const lastError = usePimp((s) => s.lastError);
   const [text, setText] = useState("");
   const [collection, setCollection] = useState<CollectionId>("human_pd");
   const [filter, setFilter] = useState<CollectionId | "all">("all");
+  const [forceUnreviewed, setForceUnreviewed] = useState(false);
 
-  const suites = useMemo(() => runSuites(corpus), [corpus]);
+  const suites = useMemo(
+    () => runSuites(corpus, filter === "all" ? {} : { collection: filter }),
+    [corpus, filter],
+  );
   const shown = filter === "all" ? corpus : corpus.filter((r) => r.collection === filter);
+  const exportSlice = exportRecords(corpus, filter === "all" ? undefined : filter);
+  const reviewLines = shown.flatMap((r) =>
+    (r.annotation?.lines ?? [])
+      .filter((l) => l.verdict === "REWRITE" || l.verdict === "BLOCK")
+      .map((l) => ({ rec: r, line: l })),
+  );
 
   return (
     <div className="max-w-5xl space-y-8">
@@ -28,9 +44,16 @@ export function ModuleView() {
         <h1 className="font-display text-3xl mt-1">Module Lab</h1>
         <p className="text-muted mt-2 max-w-2xl leading-relaxed">
           Public-domain / CC human lyrics only. Permissive AI only. Self-plugs stay separated.
-          No scraping of protected catalogs. Version bumps require human accept.
+          Scores come from the same runK2 path as the CLI. Version bumps require a reviewed
+          sample.
         </p>
       </header>
+
+      {lastError ? (
+        <p className="rounded-[var(--radius-md)] border border-fail/40 bg-surface px-3 py-2 text-sm text-fail">
+          {lastError}
+        </p>
+      ) : null}
 
       <section className="rounded-[var(--radius-lg)] border border-border bg-bg-elevated p-5 space-y-3">
         <Label>Ingest (JSONL, JSON, or raw lyrics)</Label>
@@ -61,8 +84,11 @@ export function ModuleView() {
           >
             Ingest + annotate
           </Button>
-          <CopyBtn text={toJsonl(corpus)} label="Export JSONL" />
+          <CopyBtn text={toJsonl(exportSlice)} label="Export JSONL" />
         </div>
+        <p className="text-xs text-subtle">
+          Ingest stamps the selected collection. Export never re-buckets.
+        </p>
       </section>
 
       <section className="grid md:grid-cols-2 xl:grid-cols-3 gap-3">
@@ -80,7 +106,7 @@ export function ModuleView() {
                 </li>
               ))}
             </ul>
-            {s.notes.slice(0, 4).map((n) => (
+            {s.notes.slice(0, 6).map((n) => (
               <p key={n} className="text-xs text-muted">
                 {n}
               </p>
@@ -97,7 +123,7 @@ export function ModuleView() {
             value={filter}
             onChange={(e) => setFilter(e.target.value as CollectionId | "all")}
           >
-            <option value="all">all</option>
+            <option value="all">all (split metrics)</option>
             <option value="human_pd">human_pd</option>
             <option value="ai_permissive">ai_permissive</option>
             <option value="self_generated">self_generated</option>
@@ -112,6 +138,7 @@ export function ModuleView() {
                   <p className="text-xs text-subtle">
                     {r.collection} · {r.license} · {r.provenance}
                   </p>
+                  <p className="text-xs font-mono text-subtle mt-0.5">{r.id}</p>
                 </div>
                 <Button type="button" size="sm" variant="ghost" onClick={() => dropRecord(r.id)}>
                   Drop
@@ -122,13 +149,27 @@ export function ModuleView() {
                   ? `mean CDS ${(
                       r.annotation.lines.reduce((a, l) => a + l.cds, 0) /
                       Math.max(1, r.annotation.lines.length)
-                    ).toFixed(2)} · ${r.annotation.lines.filter((l) => l.verdict !== "PASS").length} flags`
+                    ).toFixed(2)} · ${r.annotation.lines.filter((l) => l.verdict !== "PASS").length} flags · passed=${r.annotation.passed}`
                   : "unannotated"}
               </p>
+              <div className="mt-2 flex flex-wrap gap-1">
+                {GOLD_LABELS.map((g) => (
+                  <Button
+                    key={g}
+                    type="button"
+                    size="sm"
+                    variant={r.humanOverride === g ? "primary" : "secondary"}
+                    onClick={() => overrideRecord(r.id, g)}
+                  >
+                    {g}
+                  </Button>
+                ))}
+              </div>
               <input
                 className="mt-2 h-9 w-full rounded-[var(--radius-sm)] border border-border bg-bg-elevated px-2 text-xs"
-                placeholder="Human override / gold label"
+                placeholder="Human override / gold label (pass | false_positive | miss | free text)"
                 defaultValue={r.humanOverride}
+                key={`${r.id}:${r.humanOverride}`}
                 onBlur={(e) => overrideRecord(r.id, e.target.value)}
               />
             </li>
@@ -137,12 +178,43 @@ export function ModuleView() {
       </section>
 
       <section className="space-y-3">
+        <h2 className="text-sm uppercase tracking-widest text-muted">
+          Review queue · REWRITE / BLOCK
+        </h2>
+        {reviewLines.length === 0 ? (
+          <p className="text-xs text-muted">No rewrite/block lines in this filter.</p>
+        ) : (
+          <ul className="space-y-2 max-h-[420px] overflow-auto">
+            {reviewLines.slice(0, 40).map(({ rec, line }) => (
+              <li
+                key={`${rec.id}-${line.section}-${line.index}`}
+                className="rounded-[var(--radius-md)] border border-border p-3 text-xs"
+              >
+                <p className="text-subtle">
+                  {rec.collection} · {rec.title} · {line.section} L{line.index + 1} ·{" "}
+                  <span className={line.verdict === "BLOCK" ? "text-fail" : "text-warn"}>
+                    {line.verdict}
+                  </span>{" "}
+                  · CDS {line.cds}
+                  {line.classes.length ? ` · ${line.classes.join(", ")}` : ""}
+                </p>
+                <p className="mt-1 text-fg">{line.line}</p>
+                {line.rewrite ? (
+                  <p className="mt-1 text-muted">→ {line.rewrite}</p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="space-y-3">
         <h2 className="text-sm uppercase tracking-widest text-muted">Proposed diffs</h2>
         <Button
           type="button"
           variant="secondary"
           onClick={() => {
-            const over = suites.find((s) => s.name.startsWith("Self-overuse"));
+            const over = suites.find((s) => s.name === "Self-overuse");
             propose(
               "K2",
               "Auto-proposal from self-overuse suite. Review before accept.",
@@ -161,14 +233,24 @@ export function ModuleView() {
               </p>
               <pre className="text-xs text-muted whitespace-pre-wrap mt-2">{v.diff}</pre>
               {!v.accepted && (
-                <Button
-                  type="button"
-                  size="sm"
-                  className="mt-2"
-                  onClick={() => accept(v.id)}
-                >
-                  Accept version
-                </Button>
+                <div className="mt-2 flex flex-wrap items-center gap-3">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => accept(v.id, { forceUnreviewed })}
+                  >
+                    Accept version
+                  </Button>
+                  <label className="flex items-center gap-2 text-xs text-muted">
+                    <input
+                      type="checkbox"
+                      className="size-4"
+                      checked={forceUnreviewed}
+                      onChange={(e) => setForceUnreviewed(e.target.checked)}
+                    />
+                    force unreviewed
+                  </label>
+                </div>
               )}
             </li>
           ))}

@@ -125,9 +125,9 @@ export interface LyricRecord {
   provenance: string;
   license: string;
   createdAt: string;
-  annotation: TropeReport | null;
   humanOverride: string;
-  specSnapshot?: Partial<SpecBlock>;
+  annotation: TropeReport | null;
+  specSnapshot: Partial<SpecBlock> | null;
 }
 
 export interface ModuleVersion {

@@ -1,15 +1,19 @@
 import { PIMP_SYSTEM } from "@/pimp/engine/system-prompt";
 import { CopyBtn } from "./copy-btn";
 
-const CLI = `pimp-mod — Module Update CLI
+const CLI = `pimp-mod — empirical K-module harness (real runK2)
 Usage:
-  node cli/pimp-mod.mjs ingest --source human_pd --file lyrics.jsonl
-  node cli/pimp-mod.mjs suite
-  node cli/pimp-mod.mjs export --out corpus.jsonl
+  pimp-mod seed
+  pimp-mod ingest  --source human_pd|ai_permissive|self_generated --file <path>
+  pimp-mod annotate [--id <id>]
+  pimp-mod suite   [--collection <c>]
+  pimp-mod override --id <id> --label <pass|false_positive|miss|text>
+  pimp-mod export  [--out corpus.jsonl] [--collection <c>]
+  pimp-mod version-diff --before <file> --after <file>
+  pimp-mod bump --module K2 [--notes <text>] [--force-unreviewed]
 
-Sources allowed: human_pd (PD/CC only), ai_permissive, self_generated.
-Never scrape Genius, Musixmatch, or other protected catalogs.
-SQLite-compatible JSONL is the interchange format. Version bumps require human accept.`;
+Sources: human_pd (PD/CC commercial-reuse only), ai_permissive, self_generated.
+Collections never mix. Export preserves collection. Version bumps need a gold label.`;
 
 export function HandoffView() {
   return (
