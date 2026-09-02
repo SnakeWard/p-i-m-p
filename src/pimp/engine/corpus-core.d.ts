@@ -1,4 +1,4 @@
-import type { CollectionId, LyricRecord, SpecBlock, TropeReport } from "../types";
+import type { CollectionId, GoldRow, LyricRecord, SpecBlock, TropeReport } from "../types";
 
 export const COLLECTIONS: readonly CollectionId[];
 
@@ -89,3 +89,74 @@ export function assertModuleWriteAllowed(
   records: LyricRecord[],
   forceUnreviewed?: boolean,
 ): { ok: boolean; forced: boolean; message?: string };
+
+export const EVIDENCE_FLOOR: { readonly threshold: number; readonly surface: number };
+
+export type ReplayStatus = "correct" | "incorrect" | "unscored" | "unresolved";
+
+export interface ReplayRow {
+  gold_id: string;
+  record_id: string;
+  collection: CollectionId;
+  section: string;
+  line_index: number;
+  label: string;
+  label_scope: string;
+  surface: string | null;
+  pred_verdict: string | null;
+  current_verdict: string | null;
+  current_cds: number | null;
+  drifted: boolean;
+  status: ReplayStatus;
+  detail: string;
+}
+
+export interface ReplayBucket {
+  n: number;
+  scored: number;
+  correct: number;
+  agreement: number | null;
+}
+
+export interface ReplayResult {
+  n_gold: number;
+  n_scored: number;
+  n_correct: number;
+  n_incorrect: number;
+  n_unscored: number;
+  n_unresolved: number;
+  /** null when nothing was scorable — unknown, not perfect. */
+  agreement: number | null;
+  new_false_positives: number;
+  new_misses: number;
+  drift: number;
+  by_surface: Record<string, ReplayBucket>;
+  by_collection: Record<string, ReplayBucket>;
+  rows: ReplayRow[];
+}
+
+export function expectedFor(goldRow: GoldRow):
+  | { kind: "verdict"; value: string }
+  | { kind: "quiet" }
+  | { kind: "fires" }
+  | { kind: "cds_range"; min: number; max: number }
+  | { kind: "unscored" };
+
+export function replayGold(
+  goldRows: GoldRow[],
+  records: LyricRecord[],
+  options?: { collection?: CollectionId },
+): ReplayResult;
+
+export function formatReplayReport(result: ReplayResult): string;
+
+export function assertModuleEvidence(
+  goldRows: GoldRow[],
+  opts?: { change?: "threshold" | "surface"; collection?: CollectionId; force?: boolean },
+): { ok: boolean; forced: boolean; change: string; floor: number; n: number; message?: string };
+
+export function assertNoRegression(
+  previousAgreement: number | undefined,
+  currentAgreement: number | null,
+  opts?: { force?: boolean },
+): { ok: boolean; forced: boolean; delta: number | null; message?: string };

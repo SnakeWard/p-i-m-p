@@ -4,7 +4,14 @@
  * CLI and Module Lab must import this module — never a second scorer.
  */
 import { runK2 } from "./k2-core.mjs";
-import { goldDetectionMetrics, goldSuiteNotes } from "./gold-core.mjs";
+import { engineFired, goldDetectionMetrics, goldSuiteNotes } from "./gold-core.mjs";
+
+/**
+ * P5 evidence floors — how much labelled evidence a K2 change must stand on.
+ * "threshold" retunes an existing number; "surface" changes how a detector
+ * decides. Recorded on the module-version entry so the bar stays auditable.
+ */
+export const EVIDENCE_FLOOR = Object.freeze({ threshold: 20, surface: 50 });
 
 export const COLLECTIONS = Object.freeze(["human_pd", "ai_permissive", "self_generated"]);
 
@@ -559,5 +566,289 @@ export function assertModuleWriteAllowed(records, forceUnreviewed, goldRows = []
     forced: false,
     message:
       "module version bump blocked: review at least one sample (set humanOverride) or pass --force-unreviewed",
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* P1 — Regression gate                                                */
+/*                                                                     */
+/* goldDetectionMetrics scores against the predictions FROZEN at label  */
+/* time, so it cannot see a change to K2 — rewrite the scorer and every */
+/* number stays identical. replayGold re-runs the CURRENT scorer over   */
+/* each gold row and asks whether the engine still does what the human  */
+/* said it should. This is the only figure that moves when K2 moves.    */
+/* ------------------------------------------------------------------ */
+
+/** What the human said should happen at this line, in checkable form. */
+export function expectedFor(goldRow) {
+  const g = goldRow;
+  if (
+    g.label_scope === "cds" &&
+    (typeof g.desired_cds_min === "number" || typeof g.desired_cds_max === "number")
+  ) {
+    return {
+      kind: "cds_range",
+      min: typeof g.desired_cds_min === "number" ? g.desired_cds_min : -Infinity,
+      max: typeof g.desired_cds_max === "number" ? g.desired_cds_max : Infinity,
+    };
+  }
+  if (g.desired_verdict) return { kind: "verdict", value: g.desired_verdict };
+  switch (g.label) {
+    // "pass" means the engine was right at label time: it must still agree.
+    case "pass":
+      return { kind: "verdict", value: g.pred_verdict };
+    case "false_positive":
+      return { kind: "quiet" };
+    case "miss":
+      return { kind: "fires" };
+    default:
+      // "partial" carries no machine-checkable target without desired_verdict.
+      return { kind: "unscored" };
+  }
+}
+
+function locateReplayLine(report, goldRow) {
+  if (goldRow.line_index < 0) {
+    const fail = (report.sectionFailures ?? []).find((f) =>
+      String(f).startsWith(goldRow.section),
+    );
+    return { verdict: fail ? "CONDITIONAL" : "PASS", cds: null, classes: [], found: true };
+  }
+  const hit = (report.lines ?? []).find(
+    (l) => l.section === goldRow.section && l.index === goldRow.line_index,
+  );
+  if (!hit) return { found: false };
+  return { verdict: hit.verdict, cds: hit.cds, classes: hit.classes ?? [], found: true };
+}
+
+/**
+ * Re-run the current K2 over every gold row.
+ *
+ * `records` must be the corpus the gold rows point at. A row whose record is
+ * gone, or whose line no longer exists, is reported unresolved rather than
+ * silently counted as agreement.
+ */
+export function replayGold(goldRows, records, options = {}) {
+  const collection = options.collection;
+  if (collection) assertCollection(collection);
+
+  let gold = Array.isArray(goldRows) ? goldRows.slice() : [];
+  if (collection) gold = gold.filter((g) => g.collection === collection);
+
+  const byId = new Map((records ?? []).map((r) => [r.id, r]));
+  const cache = new Map();
+  const rows = [];
+
+  for (const g of gold) {
+    const rec = byId.get(g.record_id);
+    if (!rec) {
+      rows.push({ ...baseRow(g), status: "unresolved", detail: "record not in corpus" });
+      continue;
+    }
+    let report = cache.get(rec.id);
+    if (!report) {
+      report = annotateRecord(rec, rec.specSnapshot ?? undefined).annotation;
+      cache.set(rec.id, report);
+    }
+    const now = locateReplayLine(report, g);
+    if (!now.found) {
+      rows.push({ ...baseRow(g), status: "unresolved", detail: "line no longer in lyric" });
+      continue;
+    }
+
+    const expected = expectedFor(g);
+    const drifted = now.verdict !== g.pred_verdict;
+    if (expected.kind === "unscored") {
+      rows.push({
+        ...baseRow(g),
+        status: "unscored",
+        current_verdict: now.verdict,
+        current_cds: now.cds,
+        drifted,
+        detail: "partial label with no desired_verdict",
+      });
+      continue;
+    }
+
+    let correct;
+    if (expected.kind === "verdict") correct = now.verdict === expected.value;
+    else if (expected.kind === "quiet") correct = !engineFired(now.verdict);
+    else if (expected.kind === "fires") correct = engineFired(now.verdict);
+    else correct = now.cds !== null && now.cds >= expected.min && now.cds <= expected.max;
+
+    rows.push({
+      ...baseRow(g),
+      status: correct ? "correct" : "incorrect",
+      current_verdict: now.verdict,
+      current_cds: now.cds,
+      drifted,
+      detail: correct ? "" : describeMiss(expected, now),
+    });
+  }
+
+  return summariseReplay(rows);
+}
+
+function baseRow(g) {
+  return {
+    gold_id: g.gold_id,
+    record_id: g.record_id,
+    collection: g.collection,
+    section: g.section,
+    line_index: g.line_index,
+    label: g.label,
+    label_scope: g.label_scope,
+    surface: g.proposed_surface ?? null,
+    pred_verdict: g.pred_verdict,
+    current_verdict: null,
+    current_cds: null,
+    drifted: false,
+    detail: "",
+  };
+}
+
+function describeMiss(expected, now) {
+  if (expected.kind === "verdict") return `wanted ${expected.value}, got ${now.verdict}`;
+  if (expected.kind === "quiet") return `should stay quiet, got ${now.verdict}`;
+  if (expected.kind === "fires") return `should fire, got ${now.verdict}`;
+  return `CDS ${now.cds} outside [${expected.min}, ${expected.max}]`;
+}
+
+function summariseReplay(rows) {
+  const scored = rows.filter((r) => r.status === "correct" || r.status === "incorrect");
+  const correct = rows.filter((r) => r.status === "correct");
+  const newFalsePositives = rows.filter(
+    (r) => r.status === "incorrect" && r.label === "false_positive",
+  ).length;
+  const newMisses = rows.filter((r) => r.status === "incorrect" && r.label === "miss").length;
+
+  const bucket = (key) => {
+    const out = {};
+    for (const r of rows) {
+      const k = r[key] ?? "none";
+      out[k] ??= { n: 0, scored: 0, correct: 0 };
+      out[k].n += 1;
+      if (r.status === "correct" || r.status === "incorrect") out[k].scored += 1;
+      if (r.status === "correct") out[k].correct += 1;
+    }
+    for (const v of Object.values(out)) {
+      v.agreement = v.scored ? v.correct / v.scored : null;
+    }
+    return out;
+  };
+
+  return {
+    n_gold: rows.length,
+    n_scored: scored.length,
+    n_correct: correct.length,
+    n_incorrect: scored.length - correct.length,
+    n_unscored: rows.filter((r) => r.status === "unscored").length,
+    n_unresolved: rows.filter((r) => r.status === "unresolved").length,
+    // null, not 1.0 — an empty gold set has no agreement, it has no evidence.
+    agreement: scored.length ? correct.length / scored.length : null,
+    new_false_positives: newFalsePositives,
+    new_misses: newMisses,
+    drift: rows.filter((r) => r.drifted).length,
+    by_surface: bucket("surface"),
+    by_collection: bucket("collection"),
+    rows,
+  };
+}
+
+export function formatReplayReport(result) {
+  const pct = (v) => (v === null ? "n/a" : `${(v * 100).toFixed(1)}%`);
+  const out = [];
+  out.push("=== K2 replay (current scorer vs gold) ===");
+  out.push(
+    `agreement: ${pct(result.agreement)}  (${result.n_correct}/${result.n_scored} scored of ${result.n_gold} gold)`,
+  );
+  out.push(
+    `new_false_positives: ${result.new_false_positives}  new_misses: ${result.new_misses}  drift: ${result.drift}`,
+  );
+  if (result.n_unscored || result.n_unresolved) {
+    out.push(`unscored: ${result.n_unscored}  unresolved: ${result.n_unresolved}`);
+  }
+  if (result.n_scored === 0) {
+    out.push("");
+    out.push("No scorable gold rows. Agreement is unknown, not perfect.");
+  }
+
+  const section = (title, buckets) => {
+    const keys = Object.keys(buckets);
+    if (!keys.length) return;
+    out.push("");
+    out.push(title);
+    for (const k of keys.sort()) {
+      const b = buckets[k];
+      out.push(`  ${k}: ${pct(b.agreement)} (${b.correct}/${b.scored}, n=${b.n})`);
+    }
+  };
+  section("by surface:", result.by_surface);
+  section("by collection:", result.by_collection);
+
+  const bad = result.rows.filter((r) => r.status === "incorrect");
+  if (bad.length) {
+    out.push("");
+    out.push("disagreements:");
+    for (const r of bad.slice(0, 20)) {
+      out.push(
+        `  ${r.gold_id} ${r.collection} ${r.section}:${r.line_index} [${r.label}] ${r.detail}`,
+      );
+    }
+    if (bad.length > 20) out.push(`  … ${bad.length - 20} more`);
+  }
+
+  const unresolved = result.rows.filter((r) => r.status === "unresolved");
+  if (unresolved.length) {
+    out.push("");
+    out.push("unresolved:");
+    for (const r of unresolved.slice(0, 10)) {
+      out.push(`  ${r.gold_id} ${r.record_id}: ${r.detail}`);
+    }
+  }
+  return out.join("\n") + "\n";
+}
+
+/** P5 — is there enough labelled evidence to accept this class of change? */
+export function assertModuleEvidence(goldRows, opts = {}) {
+  const change = opts.change === "threshold" ? "threshold" : "surface";
+  const floor = EVIDENCE_FLOOR[change];
+  let gold = Array.isArray(goldRows) ? goldRows : [];
+  if (opts.collection) {
+    assertCollection(opts.collection);
+    gold = gold.filter((g) => g.collection === opts.collection);
+  }
+  const n = gold.length;
+  if (n >= floor) return { ok: true, forced: false, change, floor, n };
+  if (opts.force) return { ok: true, forced: true, change, floor, n };
+  return {
+    ok: false,
+    forced: false,
+    change,
+    floor,
+    n,
+    message:
+      `module bump blocked: a ${change} change needs ${floor} gold rows` +
+      `${opts.collection ? ` in ${opts.collection}` : ""}, found ${n}. ` +
+      `Label more with "pimp-mod gold add", or pass --force-unreviewed.`,
+  };
+}
+
+/** P1 — refuse a bump that lowers agreement against the last accepted version. */
+export function assertNoRegression(previousAgreement, currentAgreement, opts = {}) {
+  if (typeof previousAgreement !== "number" || typeof currentAgreement !== "number") {
+    return { ok: true, forced: false, delta: null };
+  }
+  const delta = currentAgreement - previousAgreement;
+  if (delta >= 0) return { ok: true, forced: false, delta };
+  if (opts.force) return { ok: true, forced: true, delta };
+  return {
+    ok: false,
+    forced: false,
+    delta,
+    message:
+      `module bump blocked: agreement fell from ${(previousAgreement * 100).toFixed(1)}% ` +
+      `to ${(currentAgreement * 100).toFixed(1)}% (${(delta * 100).toFixed(1)} pts). ` +
+      `Fix the regression, or pass --force-regression "<reason>".`,
   };
 }

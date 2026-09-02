@@ -163,20 +163,88 @@ function detectClasses(line, section) {
   return [...new Set(classes)];
 }
 
-function rewriteLine(line, spec) {
-  const title = spec.title || "the unpaid invoice";
-  const object = title.split(" ")[0] || "counter";
-  return line
-    .replace(/rise above( the pain)?/gi, `climb the ${object} stairs on third shift`)
-    .replace(/shattered dreams/gi, "the lease unsigned on the counter")
-    .replace(/whispers in the dark/gi, "your key still scraping the lock")
-    .replace(/broken dreams/gi, "the voicemail I never deleted")
-    .replace(/we're all in this together/gi, "the night crew still clocks the same door")
-    .replace(/fire burns inside my soul/gi, "the kettle clicks off and I still wait")
-    .replace(/i can't go on without you/gi, "I still set two alarms for a house of one")
-    .replace(/lost inside the silence/gi, "the fridge hums louder than the hallway")
-    .replace(/you're everything/gi, `you left the ${object} and took the reasons`)
-    .replace(/and then i realized.+/gi, "I will leave the spare key on the meter");
+/*
+ * P3 — Rewrite ladder.
+ *
+ * The old implementation substituted a fixed phrasebook, so every song that
+ * tripped "rise above" received the same third-shift stairs. An anti-trope
+ * engine that injects its own house clichés homogenises a catalogue faster
+ * than the tropes it removes.
+ *
+ * Now a T2 rewrite is built from THIS song's anchors — persona anchors first,
+ * then concrete nouns the lyric already established, then the title. With no
+ * anchor to build on, K2 refuses to invent: it emits a directive for the
+ * writer instead of a line, and the caller downgrades the verdict.
+ *
+ * The frames below are scaffolding, not content. Because the noun comes from
+ * the song, two songs sharing a frame still do not share a line.
+ */
+const T2_FRAMES = [
+  (a) => `I still count the ${a}`,
+  (a) => `nobody moved the ${a}`,
+  (a) => `the ${a} is where I left it`,
+  (a) => `I keep the ${a} in the same place`,
+  (a) => `I stopped explaining the ${a}`,
+  (a) => `the ${a} outlasted the argument`,
+];
+
+function stableHash(text) {
+  let h = 0;
+  for (let i = 0; i < text.length; i++) {
+    h = (h * 31 + text.charCodeAt(i)) >>> 0;
+  }
+  return h;
+}
+
+/**
+ * Anchors this song can borrow from, in tiers of decreasing specificity.
+ *
+ * Tiers are exhausted in order: a persona anchor is always preferred to a noun
+ * the lyric happened to use, and both beat the title. Flattening these into one
+ * pool let a shared title bleed identical rewrites across different songs.
+ */
+function anchorTiers(spec, songNouns) {
+  const seen = new Set();
+  const take = (value) => {
+    const clean = String(value ?? "").trim();
+    if (!clean || seen.has(clean)) return null;
+    seen.add(clean);
+    return clean;
+  };
+  const persona = (spec.personaAnchors ?? []).map(take).filter(Boolean);
+  const own = (songNouns ?? []).map(take).filter(Boolean);
+  const titleWord = String(spec.title ?? "").trim().split(/\s+/).slice(-1)[0]?.toLowerCase();
+  const title = titleWord && titleWord.length > 2 ? [take(titleWord)].filter(Boolean) : [];
+  return [persona, own, title].filter((tier) => tier.length > 0);
+}
+
+/**
+ * Build a T2 replacement line, or null when the song offers nothing to anchor
+ * to. Never returns a string already used elsewhere in this track.
+ */
+function rewriteLine(line, spec, songNouns, used) {
+  const tiers = anchorTiers(spec, songNouns);
+  if (!tiers.length) return null;
+  const seed = stableHash(line);
+  for (const tier of tiers) {
+    for (let i = 0; i < tier.length; i++) {
+      const anchor = tier[(seed + i) % tier.length];
+      for (let f = 0; f < T2_FRAMES.length; f++) {
+        const candidate = T2_FRAMES[(seed + f) % T2_FRAMES.length](anchor);
+        if (!used.has(candidate)) {
+          used.add(candidate);
+          return candidate;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** What the writer should do when K2 will not invent a line for them. */
+function rewriteDirective(classes, cds) {
+  const why = classes.length ? classes.join(", ") : `CDS ${cds}`;
+  return `${why} — replace with a concrete image from this song's own objects, places or actions. K2 has no persona anchor to build from.`;
 }
 
 function interchangeability(line) {
@@ -206,6 +274,20 @@ export function runK2(lyrics, spec) {
   const strict = spec.tropeCheck === "strict";
 
   const verseNouns = {};
+  // Anchors are pooled across the whole lyric before scoring, so an early line
+  // can borrow a noun the song only establishes later.
+  const songNouns = [];
+  for (const section of sections) {
+    for (const l of section.lines) {
+      if (!l.lyric) continue;
+      const lower = l.raw.toLowerCase();
+      for (const c of CONCRETE_HINTS) {
+        if (lower.includes(c) && !songNouns.includes(c)) songNouns.push(c);
+      }
+    }
+  }
+  // No T2 string may repeat inside one track.
+  const usedRewrites = new Set();
 
   for (const section of sections) {
     const lyricLines = section.lines.filter((l) => l.lyric);
@@ -221,14 +303,25 @@ export function runK2(lyrics, spec) {
       let rewrite;
 
       if (classes.includes("FC-2") || classes.includes("FC-3") || cds === 0) {
+        // A Tier 0 veto stays a veto. The rewrite is a convenience; when the
+        // song offers no anchor the line is still refused, never downgraded.
         verdict = "BLOCK";
-        note = "Tier 0 / portable slogan — replace with scene anchoring";
-        rewrite = rewriteLine(line, spec);
+        rewrite = rewriteLine(line, spec, songNouns, usedRewrites) ?? undefined;
+        note = rewrite
+          ? "Tier 0 / portable slogan — replace with scene anchoring"
+          : `Tier 0 / portable slogan — ${rewriteDirective(classes, cds)}`;
       } else if (classes.length || cds <= 2) {
         if (interchangeability(line) || cds <= 1) {
-          verdict = "REWRITE";
-          note = `CDS ${cds}${classes.length ? ` · ${classes.join(", ")}` : ""}`;
-          rewrite = rewriteLine(line, spec);
+          rewrite = rewriteLine(line, spec, songNouns, usedRewrites) ?? undefined;
+          if (rewrite) {
+            verdict = "REWRITE";
+            note = `CDS ${cds}${classes.length ? ` · ${classes.join(", ")}` : ""}`;
+          } else {
+            // P3: no anchor to build on — flag it, leave the words alone.
+            verdict = "CONDITIONAL";
+            note = rewriteDirective(classes, cds);
+            binding.push(`${section.name} L${i + 1}: ${note}`);
+          }
         } else {
           verdict = "CONDITIONAL";
           note = "Concrete detail is decorative until a later line binds it";
@@ -237,9 +330,15 @@ export function runK2(lyrics, spec) {
       }
 
       if (strict && /chorus/i.test(section.name) && classes.includes("FC-5")) {
-        verdict = "REWRITE";
-        note = "STRICT: Tier 1 in chorus auto-rewrites";
-        rewrite = rewriteLine(line, spec);
+        const strictRewrite = rewrite ?? rewriteLine(line, spec, songNouns, usedRewrites);
+        if (strictRewrite) {
+          verdict = "REWRITE";
+          note = "STRICT: Tier 1 in chorus auto-rewrites";
+          rewrite = strictRewrite;
+        } else if (verdict !== "BLOCK") {
+          verdict = "CONDITIONAL";
+          note = `STRICT: Tier 1 in chorus — ${rewriteDirective(classes, cds)}`;
+        }
       }
 
       if (verdict === "REWRITE" || verdict === "BLOCK") {
@@ -309,15 +408,60 @@ export function runK2(lyrics, spec) {
   };
 }
 
+/**
+ * Apply T2 rewrites by (section, lyric index).
+ *
+ * The previous implementation used an unanchored String.replace, which hit
+ * only the first textual occurrence and could match inside a longer line. A
+ * repeated chorus line was rewritten once and left alone the second time.
+ *
+ * Known limitation: section names are not unique — two sections both called
+ * "Chorus" share an address here exactly as they do in the report and in gold
+ * rows, so a rewrite lands on every section of that name at that index. That
+ * is the desired behaviour for a repeated chorus and is faithful to how the
+ * report addresses lines; disambiguating it is a schema change, not a fix here.
+ */
 export function applySilentRewrites(lyrics, report) {
   if (report.mode === "off") return lyrics;
-  let out = lyrics;
+
+  const targets = new Map();
   for (const line of report.lines) {
     if ((line.verdict === "REWRITE" || line.verdict === "BLOCK") && line.rewrite) {
-      out = out.replace(line.line, line.rewrite);
+      targets.set(`${line.section} ${line.index}`, line.rewrite);
     }
   }
-  return out;
+  if (targets.size === 0) return lyrics;
+
+  const eol = lyrics.includes("\r\n") ? "\r\n" : "\n";
+  const raw = lyrics.replace(/\r\n/g, "\n").split("\n");
+  const out = [];
+  let section = "Ungrouped";
+  let index = 0;
+
+  for (const rawLine of raw) {
+    const trimmed = rawLine.trim();
+    const tag = trimmed.match(/^\[([^\]]+)\]$/);
+    if (tag) {
+      section = tag[1];
+      index = 0;
+      out.push(rawLine);
+      continue;
+    }
+    // Blank and staging-only lines are not lyric lines and are not counted,
+    // matching parseSections exactly.
+    if (!trimmed || /^\(.*\)$/.test(trimmed)) {
+      out.push(rawLine);
+      continue;
+    }
+    const replacement = targets.get(`${section} ${index}`);
+    index += 1;
+    if (replacement) {
+      out.push((rawLine.match(/^\s*/)?.[0] ?? "") + replacement);
+    } else {
+      out.push(rawLine);
+    }
+  }
+  return out.join(eol);
 }
 
 export function formatTropeLog(report) {

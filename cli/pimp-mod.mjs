@@ -12,15 +12,19 @@ import {
   SEED_PD,
   annotateRecord,
   assertCollection,
+  assertModuleEvidence,
   assertModuleWriteAllowed,
+  assertNoRegression,
   ensureAnnotated,
   exportRecords,
+  formatReplayReport,
   formatSuiteReport,
   formatVersionDiff,
   makeRecord,
   nextModuleVersion,
   parseIngest,
   parseJsonlFile,
+  replayGold,
   runSuites,
   toJsonl,
   versionDiff,
@@ -180,6 +184,21 @@ async function suite(flags) {
     throw new Error(`suite battery must emit 5 results, got ${results.length}`);
   }
   process.stdout.write(formatSuiteReport(results));
+}
+
+async function replay(flags) {
+  const rows = (await loadAll()).map(ensureAnnotated);
+  const gold = await loadGold();
+  const collection =
+    flags.collection && flags.collection !== true
+      ? assertCollection(flags.collection)
+      : undefined;
+  const result = replayGold(gold, rows, collection ? { collection } : {});
+  if (flags.json) {
+    process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+    return;
+  }
+  process.stdout.write(formatReplayReport(result));
 }
 
 async function override(flags) {
@@ -365,15 +384,48 @@ async function personaCmd(sub, flags, positionalId) {
 }
 
 async function bump(flags) {
-  const rows = await loadAll();
+  const rows = (await loadAll()).map(ensureAnnotated);
   const gold = await loadGold();
   const force = Boolean(flags["force-unreviewed"]);
+  const collection =
+    flags.collection && flags.collection !== true
+      ? assertCollection(flags.collection)
+      : undefined;
+
   const gate = assertModuleWriteAllowed(rows, force, gold);
   if (!gate.ok) throw new Error(gate.message);
   if (gate.forced) {
     console.warn("warning: --force-unreviewed — no gold-label sample in corpus");
   }
+
+  // P5 — evidence floor for this class of change.
+  const change = flags.change === "threshold" ? "threshold" : "surface";
+  const evidence = assertModuleEvidence(gold, { change, collection, force });
+  if (!evidence.ok) throw new Error(evidence.message);
+  if (evidence.forced) {
+    console.warn(
+      `warning: --force-unreviewed — ${evidence.n} gold rows below the ${evidence.floor} floor for a ${change} change`,
+    );
+  }
+
+  // P1 — agreement must not fall against the last accepted version.
   const existing = await loadVersions();
+  const replayNow = replayGold(gold, rows, collection ? { collection } : {});
+  const previous = [...existing].reverse().find((e) => typeof e.agreement === "number");
+  const forceRegression = flags["force-regression"];
+  const regression = assertNoRegression(previous?.agreement, replayNow.agreement, {
+    force: Boolean(forceRegression),
+  });
+  if (!regression.ok) throw new Error(regression.message);
+  if (regression.forced) {
+    if (forceRegression === true) {
+      throw new Error('--force-regression requires a reason: --force-regression "<why>"');
+    }
+    console.warn(
+      `warning: --force-regression (${(regression.delta * 100).toFixed(1)} pts): ${forceRegression}`,
+    );
+  }
+
   const entry = {
     id: `mod_${Date.now().toString(36)}`,
     module: flags.module && flags.module !== true ? flags.module : "K2",
@@ -382,15 +434,27 @@ async function bump(flags) {
     diff: flags.diff && flags.diff !== true ? await readFile(path.resolve(flags.diff), "utf8") : "",
     accepted: true,
     createdAt: new Date().toISOString(),
-    forceUnreviewed: gate.forced,
+    forceUnreviewed: gate.forced || evidence.forced,
+    change,
+    collection: collection ?? null,
+    evidenceFloor: evidence.floor,
+    nGold: evidence.n,
+    // P1 — the agreement this version was accepted at. The next bump is
+    // measured against it, so the gate has a baseline to compare to.
+    agreement: replayNow.agreement,
+    nScored: replayNow.n_scored,
+    forceRegression: regression.forced ? String(forceRegression) : null,
     reviewedIds: [
       ...gold.map((g) => g.gold_id),
       ...rows.filter((r) => String(r.humanOverride ?? "").trim()).map((r) => r.id),
     ],
   };
   await appendVersion(entry);
+  const shown =
+    replayNow.agreement === null ? "n/a" : `${(replayNow.agreement * 100).toFixed(1)}%`;
   console.log(
-    `bumped ${entry.module} ${entry.version}${gate.forced ? " (unreviewed)" : ""} · reviewed=${entry.reviewedIds.length}`,
+    `bumped ${entry.module} ${entry.version}${gate.forced ? " (unreviewed)" : ""} · ` +
+      `agreement=${shown} (${replayNow.n_scored} scored) · reviewed=${entry.reviewedIds.length}`,
   );
 }
 
@@ -398,6 +462,7 @@ const HELP = `pimp-mod — empirical K-module harness (real runK2)
   ingest  --source human_pd|ai_permissive|self_generated --file <path>
   annotate [--id <id>]
   suite   [--collection <c>]
+  replay  [--collection <c>] [--json]
   override --id <id> --label <text>
   gold add --id <record_id> --line <Section:index> --label <pass|false_positive|miss|partial>
            --scope <verdict|cds|class|rewrite|section_gate> --reason "..."
@@ -407,7 +472,8 @@ const HELP = `pimp-mod — empirical K-module harness (real runK2)
   export  [--out <path>] [--collection <c>]
   seed
   version-diff --before <file> --after <file>
-  bump    --module K2 [--notes <text>] [--diff <file>] [--force-unreviewed]
+  bump    --module K2 [--notes <text>] [--diff <file>] [--change threshold|surface]
+          [--collection <c>] [--force-unreviewed] [--force-regression "<why>"]
   persona validate --file <path>
   persona load     --file <path>
   persona list
@@ -430,6 +496,7 @@ try {
   } else if (cmd === "ingest") await ingest(flags);
   else if (cmd === "annotate") await annotate(flags);
   else if (cmd === "suite") await suite(flags);
+  else if (cmd === "replay") await replay(flags);
   else if (cmd === "override") await override(flags);
   else if (cmd === "gold") await goldCmd(sub, flags);
   else if (cmd === "persona") await personaCmd(sub, flags, positionalId);

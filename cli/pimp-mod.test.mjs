@@ -207,11 +207,39 @@ describe("pimp-mod CLI", () => {
     assert.equal(forced.code, 0, forced.stderr);
     assert.match(forced.stderr, /force-unreviewed/);
 
+    // P5: a humanOverride satisfies the review gate but not the evidence
+    // floor — that needs gold rows, which `override` does not create. The
+    // bump is therefore still blocked, and says why.
     const id = afterRows[0].id;
     await invoke(["override", "--id", id, "--label", "miss"]);
-    const ok = await invoke(["bump", "--module", "K2", "--notes", "reviewed"]);
+    const thin = await invoke(["bump", "--module", "K2", "--notes", "reviewed"]);
+    assert.notEqual(thin.code, 0);
+    assert.match(thin.stderr, /needs 50 gold rows/);
+
+    const ok = await invoke([
+      "bump",
+      "--module",
+      "K2",
+      "--notes",
+      "reviewed",
+      "--force-unreviewed",
+    ]);
     assert.equal(ok.code, 0, ok.stderr);
     assert.match(ok.stdout, /bumped K2/);
+    assert.match(ok.stdout, /agreement=/);
+  });
+
+  it("replay reports agreement against the current scorer", async () => {
+    const { invoke } = await run();
+    await invoke(["ingest", "--source", "ai_permissive", "--file", SLOGAN]);
+
+    const empty = await invoke(["replay"]);
+    assert.equal(empty.code, 0, empty.stderr);
+    assert.match(empty.stdout, /K2 replay/);
+    // With no gold rows there is no agreement to report, and the report must
+    // say so rather than implying a perfect score.
+    assert.match(empty.stdout, /agreement: n\/a/);
+    assert.match(empty.stdout, /Agreement is unknown, not perfect/);
   });
 
   it("gold add writes a frozen row; list/export/suite n_gold work", async () => {
