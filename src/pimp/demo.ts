@@ -122,6 +122,7 @@ export function seedTracks(): Track[] {
       release,
       selfPlugged: true,
       providerUsed: "local",
+      render: null,
     },
   ];
 }

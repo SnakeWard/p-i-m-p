@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/field";
-import { usePimp } from "@/pimp/store";
+import { AUDIO_PROVIDER_ID, usePimp } from "@/pimp/store";
 
 export function ProvidersView() {
   const providers = usePimp((s) => s.providers);
@@ -26,24 +26,26 @@ export function ProvidersView() {
           <li key={p.id} className="rounded-[var(--radius-md)] border border-border p-4 space-y-3">
             <div className="flex flex-wrap justify-between gap-2">
               <p className="font-medium">{p.label}</p>
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={gen === p.id ? "primary" : "secondary"}
-                  onClick={() => setDefault("generate", p.id)}
-                >
-                  Default generate
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={evalP === p.id ? "primary" : "secondary"}
-                  onClick={() => setDefault("eval", p.id)}
-                >
-                  Default eval
-                </Button>
-              </div>
+              {p.id !== AUDIO_PROVIDER_ID && (
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={gen === p.id ? "primary" : "secondary"}
+                    onClick={() => setDefault("generate", p.id)}
+                  >
+                    Default generate
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={evalP === p.id ? "primary" : "secondary"}
+                    onClick={() => setDefault("eval", p.id)}
+                  >
+                    Default eval
+                  </Button>
+                </div>
+              )}
             </div>
             {p.id !== "grok" && (
               <div>
@@ -60,6 +62,11 @@ export function ProvidersView() {
             {p.id === "grok" && (
               <p className="text-xs text-muted">
                 No key required in this studio. Offline builds accept XAI_API_KEY.
+              </p>
+            )}
+            {p.id === AUDIO_PROVIDER_ID && (
+              <p className="text-xs text-muted">
+                Audio spend hits this key. Lyrics still use the generate provider.
               </p>
             )}
           </li>

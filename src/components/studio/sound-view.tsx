@@ -1,6 +1,7 @@
 import { Textarea } from "@/components/ui/field";
 import { usePimp } from "@/pimp/store";
 import { CopyBtn } from "./copy-btn";
+import { RenderPanel } from "./render-panel";
 
 export function SoundView() {
   const tracks = usePimp((s) => s.tracks);
@@ -31,6 +32,7 @@ export function SoundView() {
         value={t.stylePrompt}
         onChange={(e) => setStyle(e.target.value.slice(0, 1000))}
       />
+      <RenderPanel key={t.id} track={t} />
     </div>
   );
 }

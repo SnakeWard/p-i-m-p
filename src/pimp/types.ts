@@ -98,6 +98,32 @@ export interface ReleasePackage {
   coverImage?: string;
 }
 
+export type RenderStatus =
+  | "idle"
+  | "quoting"
+  | "queued"
+  | "processing"
+  | "ready"
+  | "failed";
+
+/**
+ * K3-R render metadata. Audio bytes live in IndexedDB keyed by track id —
+ * never here, because `Track` is persisted to localStorage.
+ */
+export interface TrackRender {
+  queueId: string;
+  model: string;
+  /** Set on ready, from the Content-Type Venice actually sent. */
+  mime: string | null;
+  durationSec: number;
+  costUsd: number | null;
+  status: RenderStatus;
+  error: string | null;
+  avgMs: number | null;
+  elapsedMs: number | null;
+  createdAt: string;
+}
+
 export interface Track {
   id: string;
   createdAt: string;
@@ -109,6 +135,7 @@ export interface Track {
   release: ReleasePackage | null;
   selfPlugged: boolean;
   providerUsed: string;
+  render: TrackRender | null;
 }
 
 export interface ProviderConfig {

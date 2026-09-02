@@ -22,15 +22,18 @@ import {
   type PersonaValidateResult,
 } from "./persona/schema";
 import { SEED_PERSONAS_V1 } from "./persona/seeds";
+import { deleteRender } from "./audio/idb";
 import type {
   CollectionId,
   ConflictAlert,
   LyricRecord,
   ModuleVersion,
   ProviderConfig,
+  RenderStatus,
   SpecBlock,
   StudioPhase,
   Track,
+  TrackRender,
   TropeCheckMode,
 } from "./types";
 import { EMPTY_SPEC } from "./types";
@@ -64,7 +67,17 @@ export const DEFAULT_PROVIDERS: ProviderConfig[] = [
     baseUrl: "https://api.deepseek.com",
     model: "deepseek-chat",
   },
+  {
+    id: "venice",
+    label: "Venice (audio render)",
+    key: "",
+    baseUrl: "https://api.venice.ai/api/v1",
+    model: "ace-step-15",
+  },
 ];
+
+/** Audio render only — never offered as a lyric generate/eval engine. */
+export const AUDIO_PROVIDER_ID = "venice";
 
 interface PimpState {
   phase: StudioPhase;
@@ -115,7 +128,22 @@ interface PimpState {
   setSelfPlugOptIn: (v: boolean) => void;
   proposeModule: (module: string, notes: string, diff: string) => void;
   acceptModule: (id: string, opts?: { forceUnreviewed?: boolean }) => void;
+  setRender: (partial: Partial<TrackRender> & { status: RenderStatus }) => void;
+  clearRender: () => void;
 }
+
+const EMPTY_RENDER: TrackRender = {
+  queueId: "",
+  model: "",
+  mime: null,
+  durationSec: 0,
+  costUsd: null,
+  status: "idle",
+  error: null,
+  avgMs: null,
+  elapsedMs: null,
+  createdAt: "",
+};
 
 function activeTrack(tracks: Track[], id: string | null) {
   return tracks.find((t) => t.id === id) ?? null;
@@ -225,6 +253,7 @@ export const usePimp = create<PimpState>()(
               release: null,
               selfPlugged: false,
               providerUsed: "none",
+              render: null,
             };
         const tracks = current
           ? get().tracks.map((t) => (t.id === track.id ? track : t))
@@ -343,6 +372,7 @@ export const usePimp = create<PimpState>()(
           release: buildRelease(spec, gated),
           selfPlugged: false,
           providerUsed: "scaffold",
+          render: null,
         };
         set({
           draft: spec,
@@ -529,6 +559,22 @@ export const usePimp = create<PimpState>()(
           ),
         });
       },
+      setRender: (partial) => {
+        const t = activeTrack(get().tracks, get().activeId);
+        if (!t) return;
+        const base = t.render ?? { ...EMPTY_RENDER, createdAt: nowIso() };
+        const render: TrackRender = { ...base, ...partial };
+        set({
+          // updatedAt is deliberately untouched: a poll tick is not user work.
+          tracks: get().tracks.map((x) => (x.id === t.id ? { ...x, render } : x)),
+        });
+      },
+      clearRender: () => {
+        const t = activeTrack(get().tracks, get().activeId);
+        if (!t) return;
+        void deleteRender(t.id);
+        set({ tracks: get().tracks.map((x) => (x.id === t.id ? { ...x, render: null } : x)) });
+      },
     }),
     {
       name: "pimp-console-v1",
@@ -544,9 +590,21 @@ export const usePimp = create<PimpState>()(
                 (x as { schema?: string }).schema === "pimp.persona.v1",
             ) as PersonaV1[])
           : [];
+        // Providers added after a user's last visit must still show up, and
+        // tracks saved before K3-R have no `render` key at all.
+        const savedProviders = Array.isArray(p.providers) ? p.providers : [];
+        const providers = DEFAULT_PROVIDERS.map(
+          (d) => savedProviders.find((s) => s?.id === d.id) ?? d,
+        ).concat(savedProviders.filter((s) => !DEFAULT_PROVIDERS.some((d) => d.id === s?.id)));
+        const tracks = Array.isArray(p.tracks)
+          ? p.tracks.map((t) => ({ ...t, render: t?.render ?? null }))
+          : current.tracks;
+
         return {
           ...current,
           ...p,
+          providers,
+          tracks,
           personas: v1.length ? v1 : current.personas,
           draft: {
             ...current.draft,
@@ -556,6 +614,10 @@ export const usePimp = create<PimpState>()(
           },
         };
       },
+      // INVARIANT: everything below goes to localStorage (~5MB/origin).
+      // `tracks` may carry `Track.render` METADATA only — never audio bytes,
+      // base64, or a blob URL. Audio lives in IndexedDB (see audio/idb.ts);
+      // a blob URL is session-scoped and would deserialize as a dead link.
       partialize: (s) => ({
         draft: s.draft,
         tracks: s.tracks,
